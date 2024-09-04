@@ -14,6 +14,9 @@
 #include <NimBLEUtils.h>
 #include <NimBLEServer.h>
 
+//JSON
+#include <ArduinoJson.h>
+
 #define LED_PIN_IDLE 15
 #define LED_PIN_BLE 2
 #define LED_PIN_TRAINING 4
@@ -26,6 +29,7 @@ volatile bool stateChanged = false;
 #define SERVICE_UUID        "12345678-1234-1234-1234-123456789012"
 #define SSID_CHAR_UUID      "e2e3f5a4-8c4f-11eb-8dcd-0242ac130003"
 #define PASSWORD_CHAR_UUID  "e2e3f5a4-8c4f-11eb-8dcd-0242ac130004"
+#define FILE_TRANSFER_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130005"
 
 //SD Card
 #define CS_PIN 5
@@ -35,6 +39,7 @@ NimBLEService* pService = nullptr;
 NimBLEAdvertising* pAdvertising = nullptr; 
 NimBLECharacteristic* pSsidCharacteristic = nullptr;
 NimBLECharacteristic* pPasswordCharacteristic = nullptr;
+NimBLECharacteristic* pFileTransferCharacteristic = nullptr;
 bool deviceConnected = false;
 
 String ssid = "";
@@ -45,10 +50,25 @@ MPU6050 mpu;
 
 File dataFile;
 char filename[32];
+char filenameJSON[32];
 int fileIndex = 1;
 
 const int debounceDelay = 2000; // to eliminate debouncing effect on physical switch (ms)
 volatile unsigned long lastDebounceTime = 0;
+
+//JSON
+
+// Create a JSON document
+StaticJsonDocument<2048> jsonDocument;
+JsonArray irArray = jsonDocument.createNestedArray("IR");
+JsonArray redArray = jsonDocument.createNestedArray("Red");
+JsonArray axArray = jsonDocument.createNestedArray("Ax");
+JsonArray ayArray = jsonDocument.createNestedArray("Ay");
+JsonArray azArray = jsonDocument.createNestedArray("Az");
+JsonArray gxArray = jsonDocument.createNestedArray("Gx");
+JsonArray gyArray = jsonDocument.createNestedArray("Gy");
+JsonArray gzArray = jsonDocument.createNestedArray("Gz");
+int readingsCounter = 0;
 
 //FUNCTIONS
 
@@ -61,25 +81,128 @@ void IRAM_ATTR handleButtonPress() {
     }
 }
 
-void startTraining() {
+// void startTraining() {
+//     // Search for the first available name for the file
+//     do {
+//         snprintf(filename, sizeof(filename), "/training_%d.json", fileIndex++); 
+//     } while (SD.exists(filename));
 
-    // search for first available name for file
+//     File dataFile = SD.open(filename, FILE_WRITE);
+//     if (!dataFile) {
+//         Serial.println("Failed to open file for writing");
+//         return;
+//     }
+
+//     Serial.print("Training data will be saved to: ");
+//     Serial.println(filename);
+
+//     dataFile.close();
+// }
+
+void startTraining() {
     do {
-        snprintf(filename, sizeof(filename), "/training_%d.txt", fileIndex++);
+          snprintf(filename, sizeof(filename), "/training_%d.csv", fileIndex++); 
     } while (SD.exists(filename));
-    
-    File dataFile = SD.open(filename, FILE_WRITE);
+        
+    //do {
+    //      snprintf(filenameJSON, sizeof(filename), "/training_%d.json", fileIndex++); 
+    //} while (SD.exists(filename));
+
+    dataFile = SD.open(filename, FILE_WRITE);
     if (!dataFile) {
         Serial.println("Failed to open file for writing");
         return;
     }
-
-    Serial.print("Training data will be saved to: ");
-    Serial.println(filename);
-
-    dataFile.println("IR, Red, Ax, Ay, Az, Gx, Gy, Gz");
-    dataFile.close();
+    // CSV header
+    dataFile.println("IR,RED,Ax,Ay,Az,Gx,Gy,Gz");
 }
+
+void collectAndSaveData() {
+    long irValue = particleSensor.getIR();
+    long redValue = particleSensor.getRed();
+    int16_t ax, ay, az;
+    int16_t gx, gy, gz;
+    mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+
+    // Zapisanie danych jako nowy wiersz w pliku CSV
+    dataFile.print(irValue);
+    dataFile.print(",");
+    dataFile.print(redValue);
+    dataFile.print(",");
+    dataFile.print(ax);
+    dataFile.print(",");
+    dataFile.print(ay);
+    dataFile.print(",");
+    dataFile.print(az);
+    dataFile.print(",");
+    dataFile.print(gx);
+    dataFile.print(",");
+    dataFile.print(gy);
+    dataFile.print(",");
+    dataFile.println(gz);  // Zakończenie linii
+}
+
+void endTraining() {
+    dataFile.close();  // Zamknięcie pliku CSV na koniec treningu
+}
+
+/*
+void convertCsvToJson(const char* csvFilename, const char* jsonFilename) {
+    File csvFile = SD.open(csvFilename, FILE_READ);
+    if (!csvFile) {
+        Serial.println("Failed to open CSV file for reading");
+        return;
+    }
+
+    File jsonFile = SD.open(jsonFilename, FILE_WRITE);
+    if (!jsonFile) {
+        Serial.println("Failed to open JSON file for writing");
+        csvFile.close();
+        return;
+    }
+
+    // Inicjalizacja JSON
+    jsonFile.println("{");
+    jsonFile.println("\"IR\": [");
+    jsonFile.println("\"RED\": [");
+    jsonFile.println("\"Ax\": [");
+    jsonFile.println("\"Ay\": [");
+    jsonFile.println("\"Az\": [");
+    jsonFile.println("\"Gx\": [");
+    jsonFile.println("\"Gy\": [");
+    jsonFile.println("\"Gz\": [");
+
+    while (csvFile.available()) {
+        String line = csvFile.readStringUntil('\n');
+        line.trim();
+        if (line.length() == 0) continue;  // Pomijanie pustych linii
+
+        // Konwersja String na modyfikowalny char[]
+        char lineArray[line.length() + 1];
+        line.toCharArray(lineArray, line.length() + 1);
+
+        // Podział linii na poszczególne wartości
+        int index = 0;
+        char* value = strtok(lineArray, ",");
+        while (value != nullptr) {
+            jsonFile.print(value);
+            value = strtok(nullptr, ",");
+            if (value != nullptr) {
+                jsonFile.print(",");
+            }
+            index++;
+        }
+        jsonFile.println();
+    }
+
+    jsonFile.println("]");
+    jsonFile.println("}");
+    csvFile.close();
+    jsonFile.close();
+    Serial.println("CSV file successfully converted to JSON");
+}
+*/
+
 
 void connectToWiFi() {
     Serial.print("Connecting to WiFi with SSID: ");
@@ -151,6 +274,65 @@ class CharacteristicCallbacks: public NimBLECharacteristicCallbacks {
     }
 };
 
+class FileTransferCallbacks : public NimBLECharacteristicCallbacks {
+private:
+    File file;
+    size_t chunkSize = 512; // based on MTU size and performance
+    size_t fileSize = 0;
+    size_t bytesSent = 0;
+    bool transferInProgress = false;
+
+public:
+    void onRead(NimBLECharacteristic* pCharacteristic) override {
+        if (!transferInProgress) {
+            startFileTransfer("/training_1.csv");
+        }
+
+        if (transferInProgress) {
+            sendNextChunk(pCharacteristic);
+        }
+    }
+
+    void startFileTransfer(const char* fileName) {
+        file = SD.open(fileName, FILE_READ);
+        if (!file) {
+            Serial.println("Failed to open file for reading");
+            return;
+        }
+
+        fileSize = file.size();
+        bytesSent = 0;
+        transferInProgress = true;
+
+        Serial.println("File transfer started");
+    }
+
+    void sendNextChunk(NimBLECharacteristic* pCharacteristic) {
+        if (!file || !file.available()) {
+            file.close();
+            transferInProgress = false;
+            Serial.println("File transfer completed");
+            return;
+        }
+
+        // Read the next chunk
+        uint8_t buffer[chunkSize];
+        size_t bytesRead = file.read(buffer, chunkSize);
+
+        // Send the chunk
+        pCharacteristic->setValue(buffer, bytesRead);
+        pCharacteristic->notify();
+
+        bytesSent += bytesRead;
+        Serial.printf("Sent %d/%d bytes\n", bytesSent, fileSize);
+
+        if (bytesSent >= fileSize) {
+            file.close();
+            transferInProgress = false;
+            Serial.println("File transfer completed");
+        }
+    }
+};
 
 void setup() {
     Serial.begin(115200);
@@ -227,6 +409,9 @@ void loop() {
                 digitalWrite(LED_PIN_BLE, LOW);
                 digitalWrite(LED_PIN_TRAINING, LOW);
                 
+                endTraining();  // closing the CSV file
+                //convertCsvToJson(filename, filenameJSON);  // JSON conversion, moved to mobile apps      
+
                 // Disable all devices
                 NimBLEDevice::deinit(true);
                 pServer = nullptr;
@@ -245,7 +430,6 @@ void loop() {
                 digitalWrite(LED_PIN_BLE, HIGH);
                 digitalWrite(LED_PIN_TRAINING, LOW);
 
-                SD.end();
                 // To do: connect mobile phone to ESP32 during this state
 
                     if (pAdvertising->isAdvertising() == false or pAdvertising == nullptr or pServer == nullptr or pService == nullptr) {
@@ -268,6 +452,12 @@ void loop() {
                                                 NIMBLE_PROPERTY::WRITE
                                             );
                     pPasswordCharacteristic->setCallbacks(new CharacteristicCallbacks());
+
+                    pFileTransferCharacteristic = pService->createCharacteristic(
+                            FILE_TRANSFER_UUID,
+                            NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
+                        );
+                        pFileTransferCharacteristic->setCallbacks(new FileTransferCallbacks());
 
                     pService->start();
 
@@ -311,58 +501,71 @@ void loop() {
     }
 
     if(currentState == 2){
-        // Fetch data from MAX30102 sensor
-        long irValue = particleSensor.getIR();
-        long redValue = particleSensor.getRed();
+        collectAndSaveData(); 
+        delay(10);  // 10 miliseconds
+        // // Fetch data from MAX30102 sensor
+        // long irValue = particleSensor.getIR();
+        // long redValue = particleSensor.getRed();
 
-        // Fetch data from MPU6050 sensor
-        int16_t ax, ay, az;
-        int16_t gx, gy, gz;
-        mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+        // // Fetch data from MPU6050 sensor
+        // int16_t ax, ay, az;
+        // int16_t gx, gy, gz;
+        // mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
 
-        // Serial print the raw data
-        Serial.print("IR: ");
-        Serial.print(irValue);
-        Serial.print("\tRed: ");
-        Serial.print(redValue);
-        Serial.print("\tAx: ");
-        Serial.print(ax);
-        Serial.print("\tAy: ");
-        Serial.print(ay);
-        Serial.print("\tAz: ");
-        Serial.print(az);
-        Serial.print("\tGx: ");
-        Serial.print(gx);
-        Serial.print("\tGy: ");
-        Serial.print(gy);
-        Serial.print("\tGz: ");
-        Serial.println(gz);
+        // // Add data to corresponding arrays
+        // irArray.add(irValue);
+        // redArray.add(redValue);
+        // axArray.add(ax);
+        // ayArray.add(ay);
+        // azArray.add(az);
+        // gxArray.add(gx);
+        // gyArray.add(gy);
+        // gzArray.add(gz);
 
-        dataFile = SD.open(filename, FILE_APPEND);
-        if (dataFile) {
-            // Zapis danych z czujników do pliku
-            dataFile.print(irValue);
-            dataFile.print(", ");
-            dataFile.print(redValue);
-            dataFile.print(", ");
-            dataFile.print(ax);
-            dataFile.print(", ");
-            dataFile.print(ay);
-            dataFile.print(", ");
-            dataFile.print(az);
-            dataFile.print(", ");
-            dataFile.print(gx);
-            dataFile.print(", ");
-            dataFile.print(gy);
-            dataFile.print(", ");
-            dataFile.print(gz);
-            dataFile.println();
-            dataFile.close();
-            Serial.println("Data written to SD card");
-        } else {
-            Serial.println("Failed to open file for appending");
-        }
+        // readingsCounter++;
 
-        delay(10); // Adjust delay as needed
+        // // Serial print the raw data
+        // Serial.print("IR: ");
+        // Serial.print(irValue);
+        // Serial.print("\tRed: ");
+        // Serial.print(redValue);
+        // Serial.print("\tAx: ");
+        // Serial.print(ax);
+        // Serial.print("\tAy: ");
+        // Serial.print(ay);
+        // Serial.print("\tAz: ");
+        // Serial.print(az);
+        // Serial.print("\tGx: ");
+        // Serial.print(gx);
+        // Serial.print("\tGy: ");
+        // Serial.print(gy);
+        // Serial.print("\tGz: ");
+        // Serial.println(gz);
+
+        // if (readingsCounter >= 100) {  //100 samples are equal to 1 second of work time
+        //     File dataFile = SD.open(filename, FILE_APPEND);
+        //     if (dataFile) {
+        //         serializeJson(jsonDocument, dataFile);
+        //         dataFile.println();  // New line after each batch for readability
+        //         dataFile.close();
+        //         Serial.println("Batch of data written to SD card in JSON format");
+
+        //         // Clear arrays for next batch
+        //         jsonDocument.clear();
+        //         irArray = jsonDocument.createNestedArray("IR");
+        //         redArray = jsonDocument.createNestedArray("Red");
+        //         axArray = jsonDocument.createNestedArray("Ax");
+        //         ayArray = jsonDocument.createNestedArray("Ay");
+        //         azArray = jsonDocument.createNestedArray("Az");
+        //         gxArray = jsonDocument.createNestedArray("Gx");
+        //         gyArray = jsonDocument.createNestedArray("Gy");
+        //         gzArray = jsonDocument.createNestedArray("Gz");
+        //         readingsCounter = 0;
+        //     } else {
+        //         Serial.println("Failed to open file for appending");
+        //     }
+        // }
+
+        //delay(10); // Adjust delay as needed
     }
 }
