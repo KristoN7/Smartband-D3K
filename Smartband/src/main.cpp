@@ -56,6 +56,11 @@ int fileIndex = 1;
 const int debounceDelay = 2000; // to eliminate debouncing effect on physical switch (ms)
 volatile unsigned long lastDebounceTime = 0;
 
+//The difference between these will define the sample rate (initially 10 miliseconds)
+unsigned long sampleStartTime = 0;
+unsigned long sampleEndTime = 0;
+const int samplingRateInMillis = 10;
+
 //JSON
 
 // Create a JSON document
@@ -118,8 +123,11 @@ void startTraining() {
 }
 
 void collectAndSaveData() {
+    
     long irValue = particleSensor.getIR();
     long redValue = particleSensor.getRed();
+    
+
     int16_t ax, ay, az;
     int16_t gx, gy, gz;
     mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
@@ -140,6 +148,7 @@ void collectAndSaveData() {
     dataFile.print(gy);
     dataFile.print(",");
     dataFile.println(gz);  // Zakończenie linii
+    
 }
 
 void endTraining() {
@@ -398,6 +407,7 @@ void setup() {
     // Header
     dataFile.println("IR, Red, Ax, Ay, Az, Gx, Gy, Gz");
     dataFile.close();
+
 }
 
 void loop() {
@@ -501,8 +511,17 @@ void loop() {
     }
 
     if(currentState == 2){
-        collectAndSaveData(); 
-        delay(10);  // 10 miliseconds
+
+        sampleStartTime = millis();
+        collectAndSaveData();
+
+        do{
+            sampleEndTime = millis();
+            Serial.println(sampleEndTime - sampleStartTime);
+        } while (sampleEndTime - sampleStartTime < samplingRateInMillis); // 10 miliseconds = 100Hz sampling rate
+
+
+        delay(10);  // change to millis() for proper sampling rate
         // // Fetch data from MAX30102 sensor
         // long irValue = particleSensor.getIR();
         // long redValue = particleSensor.getRed();
@@ -566,6 +585,6 @@ void loop() {
         //     }
         // }
 
-        //delay(10); // Adjust delay as needed
+        //delay(10); // Change to milis() for proper sampling rate
     }
 }
