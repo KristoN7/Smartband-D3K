@@ -369,6 +369,8 @@ void setup() {
     particleSensor.setup(); // Configure sensor with default settings
     particleSensor.setPulseAmplitudeRed(0x0A); // Turn Red LED to low to indicate sensor is running
     particleSensor.setPulseAmplitudeIR(0x0A); // Turn IR LED to low to indicate sensor is running
+    particleSensor.setSampleRate(0x18);
+    particleSensor.setFIFOAverage(8);
 
     // MPU6050 initialization
     mpu.initialize();
@@ -408,6 +410,12 @@ void setup() {
     dataFile.println("IR, Red, Ax, Ay, Az, Gx, Gy, Gz");
     dataFile.close();
 
+    //IDLE MODE IN THE BEGINNING
+
+    digitalWrite(LED_PIN_IDLE, HIGH);
+    digitalWrite(LED_PIN_BLE, LOW);
+    digitalWrite(LED_PIN_TRAINING, LOW);
+    SD.end();
 }
 
 void loop() {
@@ -519,9 +527,6 @@ void loop() {
             sampleEndTime = millis();
             Serial.println(sampleEndTime - sampleStartTime);
         } while (sampleEndTime - sampleStartTime < samplingRateInMillis); // 10 miliseconds = 100Hz sampling rate
-
-
-        delay(10);  // change to millis() for proper sampling rate
         // // Fetch data from MAX30102 sensor
         // long irValue = particleSensor.getIR();
         // long redValue = particleSensor.getRed();
