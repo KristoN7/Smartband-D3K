@@ -17,12 +17,13 @@
 //JSON
 #include <ArduinoJson.h>
 
+//Working states 
 #define LED_PIN_IDLE 15
 #define LED_PIN_BLE 2
 #define LED_PIN_TRAINING 4
 #define BUTTON_PIN 13
 
-volatile int currentState = 0;
+volatile int currentState = 0; //0 - IDLE, 1 - BLE, 2 - Collecting and saving sensor data 
 volatile bool stateChanged = false;
 
 // UUIDs for BLE Service and Characteristics
@@ -34,6 +35,7 @@ volatile bool stateChanged = false;
 //SD Card
 #define CS_PIN 5
 
+//NimBLE objects
 NimBLEServer* pServer = nullptr;
 NimBLEService* pService = nullptr; 
 NimBLEAdvertising* pAdvertising = nullptr; 
@@ -42,16 +44,18 @@ NimBLECharacteristic* pPasswordCharacteristic = nullptr;
 NimBLECharacteristic* pFileTransferCharacteristic = nullptr;
 bool deviceConnected = false;
 
+//For wifi connection (withheld)
 String ssid = "";
 String password = "";
 
-MAX30105 particleSensor;
-MPU6050 mpu;
+MAX30105 sensorMAX;
+MPU6050 sensorMPU;
+
 
 File dataFile;
 char filename[32];
-char filenameJSON[32];
-int fileIndex = 1;
+//char filenameJSON[32];
+int fileIndex = 1; //Used to create new files with new names automatically
 
 const int debounceDelay = 2000; // to eliminate debouncing effect on physical switch (ms)
 volatile unsigned long lastDebounceTime = 0;
@@ -61,9 +65,9 @@ unsigned long sampleStartTime = 0;
 unsigned long sampleEndTime = 0;
 const int samplingRateInMillis = 10;
 
-//JSON
+//JSON (withheld)
 
-// Create a JSON document
+/*
 StaticJsonDocument<2048> jsonDocument;
 JsonArray irArray = jsonDocument.createNestedArray("IR");
 JsonArray redArray = jsonDocument.createNestedArray("Red");
@@ -74,35 +78,19 @@ JsonArray gxArray = jsonDocument.createNestedArray("Gx");
 JsonArray gyArray = jsonDocument.createNestedArray("Gy");
 JsonArray gzArray = jsonDocument.createNestedArray("Gz");
 int readingsCounter = 0;
+*/
+
 
 //FUNCTIONS
 
-void IRAM_ATTR handleButtonPress() {
+void IRAM_ATTR handleButtonPress() { //changing between states is possible after 2 seconds delay
     unsigned long currentTime = millis();
-    if((currentTime - lastDebounceTime) > debounceDelay){
+    if((currentTime - lastDebounceTime) > debounceDelay){ 
         currentState = (currentState + 1) % 3; // Possible states: 0 - idle, 1 - BLE, 2 - exercise 
         stateChanged = true;
         lastDebounceTime = currentTime;
     }
 }
-
-// void startTraining() {
-//     // Search for the first available name for the file
-//     do {
-//         snprintf(filename, sizeof(filename), "/training_%d.json", fileIndex++); 
-//     } while (SD.exists(filename));
-
-//     File dataFile = SD.open(filename, FILE_WRITE);
-//     if (!dataFile) {
-//         Serial.println("Failed to open file for writing");
-//         return;
-//     }
-
-//     Serial.print("Training data will be saved to: ");
-//     Serial.println(filename);
-
-//     dataFile.close();
-// }
 
 void startTraining() {
     do {
@@ -124,15 +112,14 @@ void startTraining() {
 
 void collectAndSaveData() {
     
-    long irValue = particleSensor.getIR();
-    long redValue = particleSensor.getRed();
-    
+    long irValue = sensorMAX.getIR();
+    long redValue = sensorMAX.getRed();
 
-    int16_t ax, ay, az;
-    int16_t gx, gy, gz;
-    mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+    int16_t ax, ay, az; //accelerometer data
+    int16_t gx, gy, gz; //gyroscope data
+    sensorMPU.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
 
-    // Zapisanie danych jako nowy wiersz w pliku CSV
+    // Saving the data to file in a new row
     dataFile.print(irValue);
     dataFile.print(",");
     dataFile.print(redValue);
@@ -147,14 +134,17 @@ void collectAndSaveData() {
     dataFile.print(",");
     dataFile.print(gy);
     dataFile.print(",");
-    dataFile.println(gz);  // Zakończenie linii
+    dataFile.println(gz);
     
 }
 
 void endTraining() {
-    dataFile.close();  // Zamknięcie pliku CSV na koniec treningu
+    dataFile.close();
+    //TODO: check if closed properly
 }
 
+
+//CSV to JSON withheld on ESP32 because of memory constraints. Moved to the app. Also this method never worked, becuase of limited ways to modify json files
 /*
 void convertCsvToJson(const char* csvFilename, const char* jsonFilename) {
     File csvFile = SD.open(csvFilename, FILE_READ);
@@ -162,15 +152,12 @@ void convertCsvToJson(const char* csvFilename, const char* jsonFilename) {
         Serial.println("Failed to open CSV file for reading");
         return;
     }
-
     File jsonFile = SD.open(jsonFilename, FILE_WRITE);
     if (!jsonFile) {
         Serial.println("Failed to open JSON file for writing");
         csvFile.close();
         return;
     }
-
-    // Inicjalizacja JSON
     jsonFile.println("{");
     jsonFile.println("\"IR\": [");
     jsonFile.println("\"RED\": [");
@@ -184,13 +171,9 @@ void convertCsvToJson(const char* csvFilename, const char* jsonFilename) {
     while (csvFile.available()) {
         String line = csvFile.readStringUntil('\n');
         line.trim();
-        if (line.length() == 0) continue;  // Pomijanie pustych linii
-
-        // Konwersja String na modyfikowalny char[]
+        if (line.length() == 0) continue;  
         char lineArray[line.length() + 1];
         line.toCharArray(lineArray, line.length() + 1);
-
-        // Podział linii na poszczególne wartości
         int index = 0;
         char* value = strtok(lineArray, ",");
         while (value != nullptr) {
@@ -212,7 +195,7 @@ void convertCsvToJson(const char* csvFilename, const char* jsonFilename) {
 }
 */
 
-
+//Wifi connection withheld, all data is being send through BLE. 
 void connectToWiFi() {
     Serial.print("Connecting to WiFi with SSID: ");
     Serial.println(ssid);
@@ -240,6 +223,8 @@ void connectToWiFi() {
     }
 }
 
+
+//Simple callbacks for informing the esp32 that someone connected through BLE
 class ServerCallbacks: public NimBLEServerCallbacks {
     void onConnect(NimBLEServer* pServer) override {
         deviceConnected = true;
@@ -252,6 +237,7 @@ class ServerCallbacks: public NimBLEServerCallbacks {
     }
 };
 
+//Callback to connect to WiFi, works, but not used
 class CharacteristicCallbacks: public NimBLECharacteristicCallbacks {
     void onWrite(NimBLECharacteristic* pCharacteristic) override {
         Serial.println("Attempting to write new credentials.");
@@ -283,6 +269,7 @@ class CharacteristicCallbacks: public NimBLECharacteristicCallbacks {
     }
 };
 
+//Callback for sending training files to apps
 class FileTransferCallbacks : public NimBLECharacteristicCallbacks {
 private:
     File file;
@@ -295,6 +282,7 @@ public:
     void onRead(NimBLECharacteristic* pCharacteristic) override {
         if (!transferInProgress) {
             startFileTransfer("/training_1.csv");
+            //TODO: should start with training_1, or the earliest, after succesful transmision, should delete the file and then send next in order.
         }
 
         if (transferInProgress) {
@@ -303,7 +291,14 @@ public:
     }
 
     void startFileTransfer(const char* fileName) {
+        delay(10);
+        
+        if (!SD.begin(CS_PIN)) {
+            Serial.println("Card Mount Failed");
+        }
+
         file = SD.open(fileName, FILE_READ);
+        
         if (!file) {
             Serial.println("Failed to open file for reading");
             return;
@@ -362,19 +357,19 @@ void setup() {
     digitalWrite(LED_PIN_TRAINING, LOW);
 
     // MAX30102 initialization
-    if (!particleSensor.begin(Wire, I2C_SPEED_FAST)) {
+    if (!sensorMAX.begin(Wire, I2C_SPEED_FAST)) {
         Serial.println("MAX30102 not found. Check wiring.");
         while (1);
     }
-    particleSensor.setup(); // Configure sensor with default settings
-    particleSensor.setPulseAmplitudeRed(0x0A); // Turn Red LED to low to indicate sensor is running
-    particleSensor.setPulseAmplitudeIR(0x0A); // Turn IR LED to low to indicate sensor is running
-    particleSensor.setSampleRate(0x18);
-    particleSensor.setFIFOAverage(8);
+    sensorMAX.setup(); // Configure sensor with default settings
+    sensorMAX.setPulseAmplitudeRed(0x0A); // Turn Red LED to low to indicate sensor is running
+    sensorMAX.setPulseAmplitudeIR(0x0A); // Turn IR LED to low to indicate sensor is running
+    sensorMAX.setSampleRate(0x18);
+    sensorMAX.setFIFOAverage(8);
 
     // MPU6050 initialization
-    mpu.initialize();
-    if (!mpu.testConnection()) {
+    sensorMPU.initialize();
+    if (!sensorMPU.testConnection()) {
         Serial.println("MPU6050 connection failed. Check wiring.");
         while (1);
     }
@@ -416,6 +411,7 @@ void setup() {
     digitalWrite(LED_PIN_BLE, LOW);
     digitalWrite(LED_PIN_TRAINING, LOW);
     SD.end();
+    Serial.println("Idle mode");
 }
 
 void loop() {
@@ -438,7 +434,7 @@ void loop() {
 
                 SD.end();
                 
-                // To do: disable MAX30102 and MPU6050
+                // Todo: disable MAX30102 and MPU6050
 
                 Serial.println("Idle mode");
                 break;
@@ -448,7 +444,7 @@ void loop() {
                 digitalWrite(LED_PIN_BLE, HIGH);
                 digitalWrite(LED_PIN_TRAINING, LOW);
 
-                // To do: connect mobile phone to ESP32 during this state
+                // Todo: connect mobile phone to ESP32 during this state
 
                     if (pAdvertising->isAdvertising() == false or pAdvertising == nullptr or pServer == nullptr or pService == nullptr) {
                     
@@ -513,7 +509,7 @@ void loop() {
                 digitalWrite(LED_PIN_IDLE, LOW);
                 digitalWrite(LED_PIN_BLE, LOW);
                 digitalWrite(LED_PIN_TRAINING, LOW);
-                //To do, adjust state 4
+                //Todo, adjust state 4
                 break;
         }
     }
@@ -527,14 +523,16 @@ void loop() {
             sampleEndTime = millis();
             Serial.println(sampleEndTime - sampleStartTime);
         } while (sampleEndTime - sampleStartTime < samplingRateInMillis); // 10 miliseconds = 100Hz sampling rate
-        // // Fetch data from MAX30102 sensor
+        
+        //this methord saved data to json in batches, creating multiple json objects in one file, changed to csv files
+        // // Fetch data from MAX30102 sensor 
         // long irValue = particleSensor.getIR();
         // long redValue = particleSensor.getRed();
 
         // // Fetch data from MPU6050 sensor
         // int16_t ax, ay, az;
         // int16_t gx, gy, gz;
-        // mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+        // sensorMPU.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
 
         // // Add data to corresponding arrays
         // irArray.add(irValue);
@@ -570,7 +568,7 @@ void loop() {
         //     File dataFile = SD.open(filename, FILE_APPEND);
         //     if (dataFile) {
         //         serializeJson(jsonDocument, dataFile);
-        //         dataFile.println();  // New line after each batch for readability
+        //         dataFile.println(); 
         //         dataFile.close();
         //         Serial.println("Batch of data written to SD card in JSON format");
 
