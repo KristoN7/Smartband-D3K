@@ -31,17 +31,25 @@ volatile bool stateChanged = false;
 #define SSID_CHAR_UUID      "e2e3f5a4-8c4f-11eb-8dcd-0242ac130003"
 #define PASSWORD_CHAR_UUID  "e2e3f5a4-8c4f-11eb-8dcd-0242ac130004"
 #define FILE_TRANSFER_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130005"
+#define CONFIRMATION_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130006"  // confirmation from app regarding file transmission success
 
 //SD Card
 #define CS_PIN 5
 
-//NimBLE objects
+//NimBLE pointers
 NimBLEServer* pServer = nullptr;
 NimBLEService* pService = nullptr; 
 NimBLEAdvertising* pAdvertising = nullptr; 
+
 NimBLECharacteristic* pSsidCharacteristic = nullptr;
 NimBLECharacteristic* pPasswordCharacteristic = nullptr;
 NimBLECharacteristic* pFileTransferCharacteristic = nullptr;
+NimBLECharacteristic* pConfirmationCharacteristic = nullptr;
+
+NimBLECharacteristicCallbacks* ssidCallbacks = nullptr;
+NimBLECharacteristicCallbacks* passwordCallbacks = nullptr;
+NimBLECharacteristicCallbacks* fileTransferCallbacks = nullptr;
+NimBLECharacteristicCallbacks* confirmationCallbacks = nullptr;
 bool deviceConnected = false;
 
 //For wifi connection (withheld)
@@ -79,7 +87,6 @@ JsonArray gyArray = jsonDocument.createNestedArray("Gy");
 JsonArray gzArray = jsonDocument.createNestedArray("Gz");
 int readingsCounter = 0;
 */
-
 
 //FUNCTIONS
 
@@ -277,6 +284,7 @@ private:
     size_t fileSize = 0;
     size_t bytesSent = 0;
     bool transferInProgress = false;
+    String currentFileName;
 
 public:
     void onRead(NimBLECharacteristic* pCharacteristic) override {
@@ -296,6 +304,8 @@ public:
         if (!SD.begin(CS_PIN)) {
             Serial.println("Card Mount Failed");
         }
+
+        currentFileName = String(fileName);
 
         file = SD.open(fileName, FILE_READ);
         
@@ -334,6 +344,32 @@ public:
             file.close();
             transferInProgress = false;
             Serial.println("File transfer completed");
+        }
+    }
+
+    void deleteFile() {
+        if (SD.exists(currentFileName.c_str())) {
+            SD.remove(currentFileName.c_str());
+            Serial.println("File deleted from SD card.");
+        } else {
+            Serial.println("File not found on SD card.");
+        }
+    }
+};
+
+// Characteristic responde for file successful file transmission
+class ConfirmationCallbacks : public NimBLECharacteristicCallbacks {
+    void onWrite(NimBLECharacteristic* pCharacteristic) override {
+        std::string confirmation = pCharacteristic->getValue();
+
+        if (confirmation == "OK"){
+            Serial.println("Confirmation received from app. Deleting file.");
+            if (fileTransferCallbacks != nullptr) {
+                //casting to FileTransferCalllbacks, because, NIMBLECharactersiticCallbacks does not have deleteFile() method, so workaround necessary
+                static_cast<FileTransferCallbacks *>(fileTransferCallbacks)->deleteFile();
+            }
+        } else {
+            Serial.println("Invalid confirmation received.");
         }
     }
 };
@@ -432,6 +468,26 @@ void loop() {
                 pService = nullptr;
                 pAdvertising = nullptr;
 
+                if (ssidCallbacks != nullptr) {
+                    delete ssidCallbacks;
+                    ssidCallbacks = nullptr;
+                }
+
+                if (passwordCallbacks != nullptr) {
+                    delete passwordCallbacks;
+                    passwordCallbacks = nullptr;
+                }
+
+                if (fileTransferCallbacks != nullptr) {
+                    delete fileTransferCallbacks;
+                    fileTransferCallbacks = nullptr;
+                }
+
+                if (confirmationCallbacks != nullptr) {
+                    delete confirmationCallbacks;
+                    confirmationCallbacks = nullptr;
+                }
+
                 SD.end();
                 
                 // Todo: disable MAX30102 and MPU6050
@@ -446,42 +502,52 @@ void loop() {
 
                 // Todo: connect mobile phone to ESP32 during this state
 
-                    if (pAdvertising->isAdvertising() == false or pAdvertising == nullptr or pServer == nullptr or pService == nullptr) {
+                if (pAdvertising->isAdvertising() == false or pAdvertising == nullptr or pServer == nullptr or pService == nullptr) {
                     
-                    NimBLEDevice::init("ESP32_Smartband");
+                NimBLEDevice::init("D3K Smartband");
 
-                    pServer = NimBLEDevice::createServer();
-                    pServer->setCallbacks(new ServerCallbacks());
+                pServer = NimBLEDevice::createServer();
+                pServer->setCallbacks(new ServerCallbacks());
 
-                    pService = pServer->createService(SERVICE_UUID);
+                pService = pServer->createService(SERVICE_UUID);
 
-                    pSsidCharacteristic = pService->createCharacteristic(
-                                            SSID_CHAR_UUID,
+                ssidCallbacks = new CharacteristicCallbacks();
+                pSsidCharacteristic = pService->createCharacteristic(
+                                        SSID_CHAR_UUID,
+                                        NIMBLE_PROPERTY::WRITE
+                                    );
+                pSsidCharacteristic->setCallbacks(ssidCallbacks);
+
+                passwordCallbacks = new CharacteristicCallbacks();
+                pPasswordCharacteristic = pService->createCharacteristic(
+                                            PASSWORD_CHAR_UUID,
                                             NIMBLE_PROPERTY::WRITE
                                         );
-                    pSsidCharacteristic->setCallbacks(new CharacteristicCallbacks());
+                pPasswordCharacteristic->setCallbacks(passwordCallbacks);
 
-                    pPasswordCharacteristic = pService->createCharacteristic(
-                                                PASSWORD_CHAR_UUID,
+                fileTransferCallbacks = new FileTransferCallbacks();
+                pFileTransferCharacteristic = pService->createCharacteristic(
+                                                FILE_TRANSFER_UUID,
+                                                NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
+                                            );
+                pFileTransferCharacteristic->setCallbacks(fileTransferCallbacks);
+
+                confirmationCallbacks = new ConfirmationCallbacks();
+                pConfirmationCharacteristic = pService->createCharacteristic(
+                                                CONFIRMATION_UUID,
                                                 NIMBLE_PROPERTY::WRITE
                                             );
-                    pPasswordCharacteristic->setCallbacks(new CharacteristicCallbacks());
+                pConfirmationCharacteristic->setCallbacks(confirmationCallbacks);
 
-                    pFileTransferCharacteristic = pService->createCharacteristic(
-                            FILE_TRANSFER_UUID,
-                            NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
-                        );
-                        pFileTransferCharacteristic->setCallbacks(new FileTransferCallbacks());
+                pService->start();
 
-                    pService->start();
+                pAdvertising = NimBLEDevice::getAdvertising();
+                pAdvertising->addServiceUUID(SERVICE_UUID);
+                pAdvertising->start();
+                }
 
-                    pAdvertising = NimBLEDevice::getAdvertising();
-                    pAdvertising->addServiceUUID(SERVICE_UUID);
-                    pAdvertising->start();
-                    }
-
-                    Serial.println("BLE mode activated and advertising started");
-                break;
+                Serial.println("BLE mode activated and advertising started");
+            break;
 
             case 2: // Exercise state, collect data from sensors
                 digitalWrite(LED_PIN_IDLE, LOW);
@@ -494,7 +560,25 @@ void loop() {
                 pService = nullptr;
                 pAdvertising = nullptr;
 
+                if (ssidCallbacks != nullptr) {
+                    delete ssidCallbacks;
+                    ssidCallbacks = nullptr;
+                }
 
+                if (passwordCallbacks != nullptr) {
+                    delete passwordCallbacks;
+                    passwordCallbacks = nullptr;
+                }
+
+                if (fileTransferCallbacks != nullptr) {
+                    delete fileTransferCallbacks;
+                    fileTransferCallbacks = nullptr;
+                }
+
+                if (confirmationCallbacks != nullptr) {
+                    delete confirmationCallbacks;
+                    confirmationCallbacks = nullptr;
+                }
 
                 if (!SD.begin(CS_PIN)) {
                     Serial.println("Card Mount Failed");
