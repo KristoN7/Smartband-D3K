@@ -17,6 +17,9 @@
 //JSON
 #include <ArduinoJson.h>
 
+//Time, note: send bytes in Little Endian
+#include <time.h>
+
 //Working states 
 #define LED_PIN_IDLE 15
 #define LED_PIN_BLE 2
@@ -32,6 +35,7 @@ volatile bool stateChanged = false;
 #define PASSWORD_CHAR_UUID  "e2e3f5a4-8c4f-11eb-8dcd-0242ac130004"
 #define FILE_TRANSFER_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130005"
 #define CONFIRMATION_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130006"  // confirmation from app regarding file transmission success
+#define TIME_SYNC_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130007"
 
 //SD Card
 #define CS_PIN 5
@@ -45,11 +49,13 @@ NimBLECharacteristic* pSsidCharacteristic = nullptr;
 NimBLECharacteristic* pPasswordCharacteristic = nullptr;
 NimBLECharacteristic* pFileTransferCharacteristic = nullptr;
 NimBLECharacteristic* pConfirmationCharacteristic = nullptr;
+NimBLECharacteristic* pTimeSyncCharacteristic = nullptr;
 
 NimBLECharacteristicCallbacks* ssidCallbacks = nullptr;
 NimBLECharacteristicCallbacks* passwordCallbacks = nullptr;
 NimBLECharacteristicCallbacks* fileTransferCallbacks = nullptr;
 NimBLECharacteristicCallbacks* confirmationCallbacks = nullptr;
+NimBLECharacteristicCallbacks* timeSyncCallbacks = nullptr;
 bool deviceConnected = false;
 
 //For wifi connection (withheld)
@@ -73,6 +79,10 @@ volatile unsigned long lastDebounceTime = 0;
 unsigned long sampleStartTime = 0;
 unsigned long sampleEndTime = 0;
 const int samplingRateInMillis = 10;
+
+//For time counter in UTC format
+unsigned long syncedTime = 0; // time synchronized using app's time (UNIX timestamp)
+unsigned long lastSyncMillis = 0; // time in milliseconds when synchronization occurred
 
 //JSON (withheld)
 
@@ -100,7 +110,21 @@ void IRAM_ATTR handleButtonPress() { //changing between states is possible after
     }
 }
 
+unsigned long getCurrentTime() {
+    if (syncedTime == 0) {
+        // Not synchronized
+        Serial.println("Time not synchronized");
+        return 0;
+    }
+
+    unsigned long elapsedMillis = millis() - lastSyncMillis;
+    unsigned long currentTime = syncedTime + elapsedMillis / 1000; // Dodaj upływ czasu do zsynchronizowanego czasu
+    return currentTime;
+}
+
 void startTraining() {
+    unsigned long trainingStartTime = getCurrentTime() + 3600; //3600, because Poland is in UTC+1 timezone
+
     do {
           snprintf(filename, sizeof(filename), "/training_%d.csv", fileIndex++); 
     } while (SD.exists(filename));
@@ -114,7 +138,15 @@ void startTraining() {
         Serial.println("Failed to open file for writing");
         return;
     }
+
+    //Saving time in UTC
+    char timeString[30];
+    struct tm *timeInfo = gmtime((time_t *)&trainingStartTime);
+    strftime(timeString, sizeof(timeString), "%Y-%m-%d %H:%M:%S", timeInfo);
+
     // CSV header
+     dataFile.printf("Training start time (UTC): %s\n", timeString); //UTC
+    dataFile.printf("%lu\n", trainingStartTime); //UNIX
     dataFile.println("IR,RED,Ax,Ay,Az,Gx,Gy,Gz");
 }
 
@@ -397,7 +429,22 @@ class ConfirmationCallbacks : public NimBLECharacteristicCallbacks {
     }
 };
 
+class TimeSyncCallbacks : public NimBLECharacteristicCallbacks {
+    void onWrite(NimBLECharacteristic* pCharacteristic) override {
+        std::string value = pCharacteristic->getValue();
 
+        // IMPORANT: send UNIX timestamp (seconds passed since 1970-01-01 00:00:00 UTC)
+        // IMPORTANT2: send bytes in Little Endian
+        if (value.length() == sizeof(unsigned long)) {
+            syncedTime = *(unsigned long*)value.data(); //basically a casting to unsinged long from 4-byte string
+            lastSyncMillis = millis();
+            Serial.print("Synchronized time: ");
+            Serial.println(syncedTime);
+        } else {
+            Serial.println("Invalid time data received");
+        }
+    }
+};
 
 void setup() {
     Serial.begin(115200);
@@ -463,6 +510,7 @@ void setup() {
     Serial.printf("SD Card Size: %lluMB\n", cardSize);
 
     // Header
+    //todo: check if it is still neccessary
     dataFile.println("IR, Red, Ax, Ay, Az, Gx, Gy, Gz");
     dataFile.close();
 
@@ -567,6 +615,12 @@ void loop() {
                                                 NIMBLE_PROPERTY::WRITE
                                             );
                 pConfirmationCharacteristic->setCallbacks(confirmationCallbacks);
+
+                timeSyncCallbacks = new TimeSyncCallbacks();
+                pTimeSyncCharacteristic = pService->createCharacteristic(
+                                            TIME_SYNC_UUID,
+                                            NIMBLE_PROPERTY::WRITE);
+                pTimeSyncCharacteristic->setCallbacks(timeSyncCallbacks);
 
                 pService->start();
 
