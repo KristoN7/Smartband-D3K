@@ -64,6 +64,7 @@ File dataFile;
 char filename[32];
 //char filenameJSON[32];
 int fileIndex = 1; //Used to create new files with new names automatically
+int currentFileIndex = 1;  // last file sent +1
 
 const int debounceDelay = 2000; // to eliminate debouncing effect on physical switch (ms)
 volatile unsigned long lastDebounceTime = 0;
@@ -289,8 +290,10 @@ private:
 public:
     void onRead(NimBLECharacteristic* pCharacteristic) override {
         if (!transferInProgress) {
-            startFileTransfer("/training_1.csv");
-            //TODO: should start with training_1, or the earliest, after succesful transmision, should delete the file and then send next in order.
+            if (!SD.begin(CS_PIN)) {
+            Serial.println("Card Mount Failed");
+            }
+            sendNextFile();
         }
 
         if (transferInProgress) {
@@ -301,17 +304,13 @@ public:
     void startFileTransfer(const char* fileName) {
         delay(10);
         
-        if (!SD.begin(CS_PIN)) {
-            Serial.println("Card Mount Failed");
-        }
-
         currentFileName = String(fileName);
 
         file = SD.open(fileName, FILE_READ);
         
         if (!file) {
             Serial.println("Failed to open file for reading");
-            return;
+            sendNextFile(); //todo: check if it is working properly. 
         }
 
         fileSize = file.size();
@@ -324,6 +323,7 @@ public:
     void sendNextChunk(NimBLECharacteristic* pCharacteristic) {
         if (!file || !file.available()) {
             file.close();
+            SD.end();
             transferInProgress = false;
             Serial.println("File transfer completed");
             return;
@@ -350,9 +350,32 @@ public:
     void deleteFile() {
         if (SD.exists(currentFileName.c_str())) {
             SD.remove(currentFileName.c_str());
-            Serial.println("File deleted from SD card.");
+            Serial.print("File deleted from SD card. File deleted: ");
+            Serial.println(currentFileName);
         } else {
             Serial.println("File not found on SD card.");
+        }
+    }
+
+    void sendNextFile() {
+
+        char filename[32];
+        currentFileIndex = 1;
+
+        while (true) {
+            snprintf(filename, sizeof(filename), "/training_%d.csv", currentFileIndex);
+            if (SD.exists(filename)) {
+                Serial.print("Found file to send: ");
+                Serial.println(filename);
+                startFileTransfer(filename); 
+                return;
+            } else {
+                currentFileIndex++;
+            }
+            if (currentFileIndex > 1000) { //1000 seems pretty unlikely to be ever reached, todo: implement a better limit system
+                Serial.println("No more files to send.");
+                return;
+            }
         }
     }
 };
@@ -373,6 +396,8 @@ class ConfirmationCallbacks : public NimBLECharacteristicCallbacks {
         }
     }
 };
+
+
 
 void setup() {
     Serial.begin(115200);
@@ -500,6 +525,10 @@ void loop() {
                 digitalWrite(LED_PIN_BLE, HIGH);
                 digitalWrite(LED_PIN_TRAINING, LOW);
 
+                if (!SD.begin(CS_PIN)) {
+                    Serial.println("Card Mount Failed");
+                }
+
                 // Todo: connect mobile phone to ESP32 during this state
 
                 if (pAdvertising->isAdvertising() == false or pAdvertising == nullptr or pServer == nullptr or pService == nullptr) {
@@ -605,7 +634,7 @@ void loop() {
 
         do{
             sampleEndTime = millis();
-            Serial.println(sampleEndTime - sampleStartTime);
+            //Serial.println(sampleEndTime - sampleStartTime);
         } while (sampleEndTime - sampleStartTime < samplingRateInMillis); // 10 miliseconds = 100Hz sampling rate
         
         //this methord saved data to json in batches, creating multiple json objects in one file, changed to csv files
