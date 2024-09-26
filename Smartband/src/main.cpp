@@ -318,10 +318,11 @@ private:
     size_t bytesSent = 0;
     bool transferInProgress = false;
     String currentFileName;
+    bool sendEndMessage = false;
 
 public:
     void onRead(NimBLECharacteristic* pCharacteristic) override {
-        if (!transferInProgress) {
+        if (!transferInProgress && !sendEndMessage) {
             if (!SD.begin(CS_PIN)) {
             Serial.println("Card Mount Failed");
             }
@@ -330,6 +331,8 @@ public:
 
         if (transferInProgress) {
             sendNextChunk(pCharacteristic);
+        } else if (sendEndMessage){
+            sendEnd(pCharacteristic);
         }
     }
 
@@ -375,8 +378,21 @@ public:
         if (bytesSent >= fileSize) {
             file.close();
             transferInProgress = false;
+            sendEndMessage = true;
             Serial.println("File transfer completed");
         }
+    }
+
+    void sendEnd(NimBLECharacteristic* pCharacteristic) {
+        const char* endMessage = "END";
+        pCharacteristic->setValue((uint8_t*)endMessage, strlen(endMessage));
+        pCharacteristic->notify();
+
+        Serial.println("Sent 'END' message");
+
+        // Reset flags to start the sending process again
+        sendEndMessage = false;
+        transferInProgress = false;
     }
 
     void deleteFile() {
