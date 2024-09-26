@@ -6,8 +6,8 @@
 #include <NimBLEServer.h>
 
 // UUIDs for BLE Service and Characteristics
-#define SERVICE_UUID        "12345678-1234-1234-1234-123456789115"
-#define MESSAGE_TRANSFER_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130015"
+#define SERVICE_UUID        "12345678-1234-1234-1234-123456789113"
+#define MESSAGE_TRANSFER_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130013"
 
 //BLUE LED
 #define LED_PIN_BLE 2
@@ -32,27 +32,29 @@ class ServerCallbacks: public NimBLEServerCallbacks {
 
 class MessageTransferCallbacks : public NimBLECharacteristicCallbacks {
 private:
-    String message = "Lewandowski ABECADLO Z PIECA SPADLO stworzył konstruktor domyślny. Doman i Krycha collab. TELEINFORMATYKA OPASKA PROJEKT D3000 ŻÓŁT ĄĆĘĘŚŁĆŻŹÓŃÓŚŃŻŹŁĆĄŚĘÓŚĄ.";
+    String message = "Lewandowski ABECADLO Z PIECA SPADLO stworzył konstruktor domyślny. Doman i Krycha collab. TELEINFORMATYKA OPASKA PROJEKT D3000 ŻÓŁT ĄTROLOÓŚŃŻŹŁĆĄŚĘÓŚĄ.";
     size_t chunkSize = 32; // based on MTU size and performance
     size_t messageSize = 0;
     size_t bytesSent = 0;
     bool transferInProgress = false;
+    bool sendEndMessage = false;
 
 public:
     void onRead(NimBLECharacteristic* pCharacteristic) override {
-        if (!transferInProgress) {
+        if (!transferInProgress && !sendEndMessage) {
             startMessageTransfer(message);
         }
 
         if (transferInProgress) {
             sendNextChunk(pCharacteristic);
+        } else if (sendEndMessage) {
+            sendEnd(pCharacteristic);
         }
     }
 
-    void startMessageTransfer(const String messageToSend) {
-
+    void startMessageTransfer(const String& messageToSend) {
         uint8_t tempBuffer[messageToSend.length() + 1]; // Create a buffer for the bytes (including null terminator)
-        message.getBytes(tempBuffer, messageToSend.length() + 1); // Extract the string as bytes
+        messageToSend.getBytes(tempBuffer, messageToSend.length() + 1); // Extract the string as bytes
         messageSize = strlen((char*)tempBuffer); // Get the actual byte size
 
         bytesSent = 0;
@@ -85,8 +87,21 @@ public:
 
         if (bytesSent >= messageSize) {
             transferInProgress = false;
+            sendEndMessage = true; // Set flag to send "END" message next
             Serial.println("Message transfer completed");
         }
+    }
+
+    void sendEnd(NimBLECharacteristic* pCharacteristic) {
+        const char* endMessage = "END";
+        pCharacteristic->setValue((uint8_t*)endMessage, strlen(endMessage));
+        pCharacteristic->notify();
+
+        Serial.println("Sent 'END' message");
+
+        // Reset flags to start the process again
+        sendEndMessage = false;
+        transferInProgress = false;
     }
 };
 
