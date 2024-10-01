@@ -32,7 +32,7 @@ class ServerCallbacks: public NimBLEServerCallbacks {
 
 class MessageTransferCallbacks : public NimBLECharacteristicCallbacks {
 private:
-    String message = "Lewandowski ABECADLO Z PIECA SPADLO stworzył konstruktor domyślny. Doman i Krycha collab. TELEINFORMATYKA OPASKA PROJEKT D3000 ŻÓŁT ĄĆĘĘŚŁĆŻŹÓŃÓŚŃŻŹŁĆĄŚĘÓŚĄ.";
+    String message = "TEST123 BartekEdition ABECADLO Z PIECA SPADLO stworzył konstruktor domyślny. Doman i Krycha collab. TELEINFORMATYKA OPASKA PROJEKT D3000 ŻÓŁT ĄĆĘĘŚŁĆŻŹÓŃÓŚŃŻŹŁĆĄŚĘÓŚĄ.";
     size_t chunkSize = 32; // based on MTU size and performance
     size_t messageSize = 0;
     size_t bytesSent = 0;
