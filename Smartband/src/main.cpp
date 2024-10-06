@@ -5,9 +5,14 @@
 #include <NimBLEUtils.h>
 #include <NimBLEServer.h>
 
+//Time, note: send bytes in Little Endian
+#include <time.h>
+
 // UUIDs for BLE Service and Characteristics
 #define SERVICE_UUID        "12345678-1234-1234-1234-123456789113"
-#define MESSAGE_TRANSFER_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130013"
+#define MESSAGE_TRANSFER_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130005"
+#define CONFIRMATION_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130006"  // confirmation from app regarding file transmission success
+#define TIME_SYNC_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130007"
 
 //BLUE LED
 #define LED_PIN_BLE 2
@@ -16,7 +21,18 @@ NimBLEServer* pServer = nullptr;
 NimBLEService* pService = nullptr; 
 NimBLEAdvertising* pAdvertising = nullptr; 
 NimBLECharacteristic* pMessageTransferCharacteristic = nullptr;
+NimBLECharacteristic* pConfirmationCharacteristic = nullptr;
+NimBLECharacteristic* pTimeSyncCharacteristic = nullptr;
+
+NimBLECharacteristicCallbacks* fileTransferCallbacks = nullptr;
+NimBLECharacteristicCallbacks* confirmationCallbacks = nullptr;
+NimBLECharacteristicCallbacks* timeSyncCallbacks = nullptr;
 bool deviceConnected = false;
+
+//For time counter in UTC format
+unsigned long syncedTime = 0; // time synchronized using app's time (UNIX timestamp)
+unsigned long lastSyncMillis = 0; // time in milliseconds when synchronization occurred
+unsigned long time1; //for displaying time in loop()
 
 class ServerCallbacks: public NimBLEServerCallbacks {
     void onConnect(NimBLEServer* pServer) override {
@@ -32,11 +48,7 @@ class ServerCallbacks: public NimBLEServerCallbacks {
 
 class MessageTransferCallbacks : public NimBLECharacteristicCallbacks {
 private:
-<<<<<<< HEAD
     String message = "TEST123 BartekEdition ABECADLO Z PIECA SPADLO stworzył konstruktor domyślny. Doman i Krycha collab. TELEINFORMATYKA OPASKA PROJEKT D3000 ŻÓŁT ĄĆĘĘŚŁĆŻŹÓŃÓŚŃŻŹŁĆĄŚĘÓŚĄ.";
-=======
-    String message = "Lewandowski ABECADLO Z PIECA SPADLO stworzył konstruktor domyślny. Doman i Krycha collab. TELEINFORMATYKA OPASKA PROJEKT D3000 ŻÓŁT ĄTROLOÓŚŃŻŹŁĆĄŚĘÓŚĄ.";
->>>>>>> d950e92219c64e6389c9286e829e3b50dcde574d
     size_t chunkSize = 32; // based on MTU size and performance
     size_t messageSize = 0;
     size_t bytesSent = 0;
@@ -109,6 +121,50 @@ public:
     }
 };
 
+// Characteristic response for successful message transmission
+class ConfirmationCallbacks : public NimBLECharacteristicCallbacks {
+    void onWrite(NimBLECharacteristic* pCharacteristic) override {
+        std::string confirmation = pCharacteristic->getValue();
+
+        if (confirmation == "OK"){
+            Serial.println("Confirmation received from app.");
+        } else {
+            Serial.println("Invalid confirmation received.");
+        }
+    }
+};
+
+// Characteristic response for successful time data transmission
+class TimeSyncCallbacks : public NimBLECharacteristicCallbacks {
+    void onWrite(NimBLECharacteristic* pCharacteristic) override {
+        std::string value = pCharacteristic->getValue();
+
+        // IMPORANT: send UNIX timestamp (seconds passed since 1970-01-01 00:00:00 UTC)
+        // IMPORTANT2: send bytes in Little Endian
+        if (value.length() == sizeof(unsigned long)) {
+            syncedTime = *(unsigned long*)value.data(); //basically a casting to unsinged long from 4-byte string
+            lastSyncMillis = millis();
+            Serial.print("Synchronized time: ");
+            Serial.println(syncedTime);
+        } else {
+            Serial.println("Invalid time data received");
+        }
+    }
+};
+
+unsigned long getCurrentTime() {
+    if (syncedTime == 0) {
+        // Not synchronized
+        Serial.println("Time not synchronized");
+        return 0;
+    }
+
+    unsigned long elapsedMillis = millis() - lastSyncMillis;
+    unsigned long currentTime = syncedTime + elapsedMillis / 1000; // Adding elapsed timed to synced time
+    return currentTime;
+}
+
+
 void setup() {
     Serial.begin(115200);
     Serial.println("Starting setup...");
@@ -118,19 +174,32 @@ void setup() {
 
     if (pAdvertising->isAdvertising() == false or pAdvertising == nullptr or pServer == nullptr or pService == nullptr) {
                     
-        NimBLEDevice::init("ESP32_Smartband_1");
+        NimBLEDevice::init("ESP32_Smartband_mini");
 
         pServer = NimBLEDevice::createServer();
         pServer->setCallbacks(new ServerCallbacks());
 
         pService = pServer->createService(SERVICE_UUID);
 
-    
         pMessageTransferCharacteristic = pService->createCharacteristic(
             MESSAGE_TRANSFER_UUID,
             NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
             );
         pMessageTransferCharacteristic->setCallbacks(new MessageTransferCallbacks());
+
+        confirmationCallbacks = new ConfirmationCallbacks();
+        pConfirmationCharacteristic = pService->createCharacteristic(
+            CONFIRMATION_UUID,
+            NIMBLE_PROPERTY::WRITE
+            );
+        pConfirmationCharacteristic->setCallbacks(confirmationCallbacks);
+
+        timeSyncCallbacks = new TimeSyncCallbacks();
+        pTimeSyncCharacteristic = pService->createCharacteristic(
+            TIME_SYNC_UUID,
+            NIMBLE_PROPERTY::WRITE
+            );
+        pTimeSyncCharacteristic->setCallbacks(timeSyncCallbacks);
 
     pService->start();
 
@@ -140,7 +209,13 @@ void setup() {
     }
 
     Serial.println("BLE mode activated and advertising started");
+
+    time1 = millis();
 }
 
 void loop() {
+    if(getCurrentTime() > 0 && millis() - time1 > 3000){
+        Serial.print(getCurrentTime());
+        time1 = millis();
     }
+}
