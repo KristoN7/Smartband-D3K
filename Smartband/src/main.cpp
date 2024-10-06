@@ -118,7 +118,7 @@ unsigned long getCurrentTime() {
     }
 
     unsigned long elapsedMillis = millis() - lastSyncMillis;
-    unsigned long currentTime = syncedTime + elapsedMillis / 1000; // Dodaj upływ czasu do zsynchronizowanego czasu
+    unsigned long currentTime = syncedTime + elapsedMillis / 1000; // Adding elapsed time to synced time
     return currentTime;
 }
 
