@@ -26,8 +26,17 @@
 #define LED_PIN_TRAINING 4
 #define BUTTON_PIN 13
 
-volatile int currentState = 0; //0 - IDLE, 1 - BLE, 2 - Collecting and saving sensor data 
+volatile int currentState = 0; //0 - IDLE, 1 - BLE, 2 - Collecting and saving sensor data TODO: change to ENUM
 volatile bool stateChanged = false;
+volatile bool buttonInterruptOccurred = false;
+
+volatile bool buttonPressed = false;  // Zmienna śledząca stan przycisku
+const unsigned long stateChangeDelay = 2000;  // Czas opóźnienia między zmianami stanów (2 sekundy)
+const int debounceDelay = 50; // to eliminate debouncing effect on physical switch (ms)
+volatile unsigned long lastDebounceTime = 0;
+const unsigned long longPressThreshold = 3000;  // Czas trzymania dla "long press" (3 sekundy)
+unsigned long buttonPressTime = 0;  // Czas wciśnięcia przycisku
+unsigned long lastStateChangeTime = 0;  // Czas ostatniej zmiany stanu
 
 // UUIDs for BLE Service and Characteristics
 #define SERVICE_UUID        "12345678-1234-1234-1234-123456789012"
@@ -72,9 +81,6 @@ char filename[32];
 int fileIndex = 1; //Used to create new files with new names automatically
 int currentFileIndex = 1;  // last file sent +1
 
-const int debounceDelay = 2000; // to eliminate debouncing effect on physical switch (ms)
-volatile unsigned long lastDebounceTime = 0;
-
 //The difference between these will define the sample rate (initially 10 miliseconds)
 unsigned long sampleStartTime = 0;
 unsigned long sampleEndTime = 0;
@@ -102,12 +108,7 @@ int readingsCounter = 0;
 //FUNCTIONS
 
 void IRAM_ATTR handleButtonPress() { //changing between states is possible after 2 seconds delay
-    unsigned long currentTime = millis();
-    if((currentTime - lastDebounceTime) > debounceDelay){ 
-        currentState = (currentState + 1) % 3; // Possible states: 0 - idle, 1 - BLE, 2 - exercise 
-        stateChanged = true;
-        lastDebounceTime = currentTime;
-    }
+    buttonInterruptOccurred = true;
 }
 
 unsigned long getCurrentTime() {
@@ -473,7 +474,7 @@ void setup() {
     pinMode(LED_PIN_TRAINING, OUTPUT);
     pinMode(BUTTON_PIN, INPUT_PULLUP); //using an inner built-in resistor on ESP32
 
-    attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), handleButtonPress, FALLING);
+    attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), handleButtonPress, CHANGE);
 
     // The initial LED state 
     digitalWrite(LED_PIN_IDLE, LOW);
@@ -540,6 +541,45 @@ void setup() {
 }
 
 void loop() {
+
+    if(buttonInterruptOccurred){
+        buttonInterruptOccurred = false;
+
+        unsigned long currentTime = millis();
+        if((currentTime - lastDebounceTime) > debounceDelay){ 
+            lastDebounceTime = currentTime;
+
+            if(digitalRead(BUTTON_PIN) == LOW && !buttonPressed){
+                buttonPressed = true;
+                buttonPressTime = currentTime;
+            }
+            else if(digitalRead(BUTTON_PIN) == HIGH && buttonPressed){
+                buttonPressed = false;
+
+                // Krótkie kliknięcie
+                if (currentTime - buttonPressTime < longPressThreshold) {
+                    // Sprawdzenie, czy minęło przynajmniej 2 sekundy od ostatniej zmiany stanu
+                    if (currentTime - lastStateChangeTime > stateChangeDelay) {
+                        if (currentState == 0) {
+                            currentState = 1;
+                        } else if (currentState == 1) {
+                            currentState = 0;
+                        } else if (currentState == 2) {
+                            currentState = 0;
+                        }
+                        lastStateChangeTime = currentTime;  // Zapisz czas ostatniej zmiany stanu
+                    }
+                } else {
+                    // Przycisk był wciśnięty przez dłużej niż 3 sekundy - "long press"
+                    currentState = 2;
+                    lastStateChangeTime = currentTime;  // Zapisz czas ostatniej zmiany stanu
+                }
+                stateChanged = true;
+            }
+            
+        }
+    }
+
     if (stateChanged) {
         stateChanged = false;
         switch (currentState) {
@@ -551,11 +591,12 @@ void loop() {
                 endTraining();  // closing the CSV file
                 //convertCsvToJson(filename, filenameJSON);  // JSON conversion, moved to mobile apps      
 
-                // Disable all devices
-                NimBLEDevice::deinit(true);
-                pServer = nullptr;
-                pService = nullptr;
-                pAdvertising = nullptr;
+                if (pServer != nullptr || pAdvertising != nullptr || pService != nullptr) {
+                    NimBLEDevice::deinit(true);
+                    pServer = nullptr;
+                    pService = nullptr;
+                    pAdvertising = nullptr;
+                }
 
                 if (ssidCallbacks != nullptr) {
                     delete ssidCallbacks;
@@ -653,11 +694,12 @@ void loop() {
                 digitalWrite(LED_PIN_BLE, LOW);
                 digitalWrite(LED_PIN_TRAINING, HIGH);
 
-                NimBLEDevice::deinit(true); 
-                NimBLEDevice::deinit(true);
-                pServer = nullptr;
-                pService = nullptr;
-                pAdvertising = nullptr;
+                if (pServer != nullptr || pAdvertising != nullptr || pService != nullptr) {
+                    NimBLEDevice::deinit(true);
+                    pServer = nullptr;
+                    pService = nullptr;
+                    pAdvertising = nullptr;
+                }
 
                 if (ssidCallbacks != nullptr) {
                     delete ssidCallbacks;
@@ -692,7 +734,7 @@ void loop() {
                 digitalWrite(LED_PIN_IDLE, LOW);
                 digitalWrite(LED_PIN_BLE, LOW);
                 digitalWrite(LED_PIN_TRAINING, LOW);
-                //Todo, adjust state 4
+                //Todo, adjust state 3
                 break;
         }
     }
