@@ -455,9 +455,9 @@ void setup() {
     pinMode(LED_PIN_IDLE, OUTPUT);
     pinMode(LED_PIN_BLE, OUTPUT);
     pinMode(LED_PIN_TRAINING, OUTPUT);
-    pinMode(BUTTON_PIN, INPUT);
+    pinMode(BUTTON_PIN, INPUT_PULLUP); //using an inner built-in resistor on ESP32
 
-    attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), handleButtonPress, RISING);
+    attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), handleButtonPress, FALLING);
 
     // The initial LED state 
     digitalWrite(LED_PIN_IDLE, LOW);
