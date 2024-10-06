@@ -428,7 +428,7 @@ public:
     }
 };
 
-// Characteristic responde for file successful file transmission
+// Characteristic response for successful file transmission
 class ConfirmationCallbacks : public NimBLECharacteristicCallbacks {
     void onWrite(NimBLECharacteristic* pCharacteristic) override {
         std::string confirmation = pCharacteristic->getValue();
