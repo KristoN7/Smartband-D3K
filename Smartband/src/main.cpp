@@ -26,15 +26,22 @@
 #define LED_PIN_TRAINING 4
 #define BUTTON_PIN 13
 
-volatile int currentState = 0; //0 - IDLE, 1 - BLE, 2 - Collecting and saving sensor data TODO: change to ENUM
+enum DeviceState
+{
+    IDLE = 0,
+    BLE = 1,
+    TRAINING = 2,
+    ERROR = 3
+};
+volatile DeviceState currentState = IDLE; //0 - IDLE, 1 - BLE, 2 - Collecting and saving sensor data TODO: change to ENUM
 volatile bool stateChanged = false;
 volatile bool buttonInterruptOccurred = false;
 
 volatile bool buttonPressed = false;  // Zmienna śledząca stan przycisku
-const unsigned long stateChangeDelay = 2000;  // Czas opóźnienia między zmianami stanów (2 sekundy)
-const int debounceDelay = 50; // to eliminate debouncing effect on physical switch (ms)
+const unsigned long stateChangeDelay = 1000;  // Czas opóźnienia między zmianami stanów (1 sekunda)
+const int debounceDelay = 250; // to eliminate debouncing effect on physical switch (ms)
 volatile unsigned long lastDebounceTime = 0;
-const unsigned long longPressThreshold = 3000;  // Czas trzymania dla "long press" (3 sekundy)
+const unsigned long longPressThreshold = 2000;  // Czas trzymania dla "long press" (2 sekundy)
 unsigned long buttonPressTime = 0;  // Czas wciśnięcia przycisku
 unsigned long lastStateChangeTime = 0;  // Czas ostatniej zmiany stanu
 
@@ -108,7 +115,7 @@ int readingsCounter = 0;
 //FUNCTIONS
 
 void IRAM_ATTR handleButtonPress() { //changing between states is possible after 2 seconds delay
-    buttonInterruptOccurred = true;
+    buttonInterruptOccurred = true; //all the code moved to loop() because of interruption timeout (program took to long while interruption)
 }
 
 unsigned long getCurrentTime() {
@@ -542,48 +549,67 @@ void setup() {
 
 void loop() {
 
-    if(buttonInterruptOccurred){
-        buttonInterruptOccurred = false;
+if (buttonInterruptOccurred || buttonPressed) {
+    buttonInterruptOccurred = false; 
 
-        unsigned long currentTime = millis();
-        if((currentTime - lastDebounceTime) > debounceDelay){ 
-            lastDebounceTime = currentTime;
+    unsigned long currentTime = millis();
 
-            if(digitalRead(BUTTON_PIN) == LOW && !buttonPressed){
-                buttonPressed = true;
-                buttonPressTime = currentTime;
-            }
-            else if(digitalRead(BUTTON_PIN) == HIGH && buttonPressed){
-                buttonPressed = false;
+    // Sprawdzenie debouncingu - tylko jeśli od ostatniej zmiany minął czas debounceDelay
+    if ((currentTime - lastDebounceTime) > debounceDelay) { 
+            Serial.print("Button pressed, time: "); 
+            Serial.println(currentTime);
 
-                // Krótkie kliknięcie
-                if (currentTime - buttonPressTime < longPressThreshold) {
-                    // Sprawdzenie, czy minęło przynajmniej 2 sekundy od ostatniej zmiany stanu
-                    if (currentTime - lastStateChangeTime > stateChangeDelay) {
-                        if (currentState == 0) {
-                            currentState = 1;
-                        } else if (currentState == 1) {
-                            currentState = 0;
-                        } else if (currentState == 2) {
-                            currentState = 0;
-                        }
-                        lastStateChangeTime = currentTime;  // Zapisz czas ostatniej zmiany stanu
+        lastDebounceTime = currentTime;  // Aktualizacja czasu debouncingu
+
+        if (digitalRead(BUTTON_PIN) == LOW && !buttonPressed) {
+            // Przycisk został wciśnięty - stan LOW
+            Serial.println("Stan button pressed");
+            buttonPressed = true;  // Aktualizuj stan przycisku
+            buttonPressTime = currentTime;  // Zapisz czas, kiedy przycisk został wciśnięty
+        } 
+        else if (digitalRead(BUTTON_PIN) == HIGH && buttonPressed) {
+            // Przycisk został puszczony - stan HIGH
+            Serial.println("Stan button not pressed");
+            buttonPressed = false;  // Aktualizuj stan przycisku
+
+            // Sprawdzenie czy przycisk był krótkim kliknięciem czy długim przytrzymaniem
+            if (currentTime - buttonPressTime < longPressThreshold) {
+                // Krótkie kliknięcie (mniej niż longPressThreshold)
+                if (currentTime - lastStateChangeTime > stateChangeDelay) {
+                    // Zmiana stanów, ale tylko jeśli minęły przynajmniej 2 sekundy od ostatniej zmiany
+                    if (currentState == IDLE) {
+                        currentState = BLE;
+                    } else if (currentState == BLE) {
+                        currentState = IDLE;
+                    } else if (currentState == TRAINING) {
+                        currentState = IDLE;
                     }
-                } else {
-                    // Przycisk był wciśnięty przez dłużej niż 3 sekundy - "long press"
-                    currentState = 2;
-                    lastStateChangeTime = currentTime;  // Zapisz czas ostatniej zmiany stanu
+                    lastStateChangeTime = currentTime;  // Zaktualizuj czas zmiany stanu
                 }
-                stateChanged = true;
+            } else if(currentState != TRAINING){
+                // Przycisk był wciśnięty przez dłużej niż 3 sekundy - "long press"
+                currentState = TRAINING;  // Zmień stan na 2
+                lastStateChangeTime = currentTime;  // Zaktualizuj czas zmiany stanu
             }
-            
+            else{
+                currentState = IDLE;
+            }
+            stateChanged = true;  // Ustaw flagę zmiany stanu
+        }
+        else if(digitalRead(BUTTON_PIN) == LOW && buttonPressed && currentTime - buttonPressTime >= longPressThreshold && currentState != TRAINING){
+            currentState = TRAINING;
+            stateChanged = true;
+            buttonPressed = false;
+            lastStateChangeTime = currentTime;
         }
     }
+}
+
 
     if (stateChanged) {
         stateChanged = false;
         switch (currentState) {
-            case 0: // Idle state, no data are collected from sensors
+            case IDLE: // Idle state, no data are collected from sensors
                 digitalWrite(LED_PIN_IDLE, HIGH);
                 digitalWrite(LED_PIN_BLE, LOW);
                 digitalWrite(LED_PIN_TRAINING, LOW);
@@ -618,6 +644,11 @@ void loop() {
                     confirmationCallbacks = nullptr;
                 }
 
+                if (timeSyncCallbacks != nullptr) {
+                    delete timeSyncCallbacks;
+                    timeSyncCallbacks = nullptr;
+                }
+
                 SD.end();
                 
                 // Todo: disable MAX30102 and MPU6050
@@ -625,7 +656,7 @@ void loop() {
                 Serial.println("Idle mode");
                 break;
 
-            case 1: // BLE state, BLE server is on, should broadcast
+            case BLE: // BLE state, BLE server is on, should broadcast
                 digitalWrite(LED_PIN_IDLE, LOW);
                 digitalWrite(LED_PIN_BLE, HIGH);
                 digitalWrite(LED_PIN_TRAINING, LOW);
@@ -689,7 +720,7 @@ void loop() {
                 Serial.println("BLE mode activated and advertising started");
             break;
 
-            case 2: // Exercise state, collect data from sensors
+            case TRAINING: // Exercise state, collect data from sensors
                 digitalWrite(LED_PIN_IDLE, LOW);
                 digitalWrite(LED_PIN_BLE, LOW);
                 digitalWrite(LED_PIN_TRAINING, HIGH);
@@ -721,6 +752,11 @@ void loop() {
                     confirmationCallbacks = nullptr;
                 }
 
+                if (timeSyncCallbacks != nullptr) {
+                    delete timeSyncCallbacks;
+                    timeSyncCallbacks = nullptr;
+                }
+
                 if (!SD.begin(CS_PIN)) {
                     Serial.println("Card Mount Failed");
                 } else {
@@ -728,6 +764,9 @@ void loop() {
                     //To do, check if data is collected
                     startTraining();
                 }
+                break;
+
+            case ERROR:
                 break;
 
             default:
@@ -739,7 +778,7 @@ void loop() {
         }
     }
 
-    if(currentState == 2){
+    if(currentState == TRAINING){
 
         sampleStartTime = millis();
         collectAndSaveData();
