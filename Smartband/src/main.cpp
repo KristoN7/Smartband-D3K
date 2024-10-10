@@ -215,7 +215,7 @@ void setup() {
 
 void loop() {
     if(getCurrentTime() > 0 && millis() - time1 > 3000){
-        Serial.print(getCurrentTime());
+        Serial.println(getCurrentTime());
         time1 = millis();
     }
 }
