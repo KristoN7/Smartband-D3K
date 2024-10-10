@@ -9,10 +9,11 @@
 #include <time.h>
 
 // UUIDs for BLE Service and Characteristics
-#define SERVICE_UUID        "12345678-1234-1234-1234-123456789113"
-#define MESSAGE_TRANSFER_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130005"
+#define SERVICE_UUID        "12345678-1234-1234-1234-123456789111"
+#define MESSAGE_TRANSFER_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130011"
 #define CONFIRMATION_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130006"  // confirmation from app regarding file transmission success
 #define TIME_SYNC_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130007"
+
 
 //BLUE LED
 #define LED_PIN_BLE 2
@@ -48,8 +49,8 @@ class ServerCallbacks: public NimBLEServerCallbacks {
 
 class MessageTransferCallbacks : public NimBLECharacteristicCallbacks {
 private:
-    String message = "TEST123 BartekEdition ABECADLO Z PIECA SPADLO stworzył konstruktor domyślny. Doman i Krycha collab. TELEINFORMATYKA OPASKA PROJEKT D3000 ŻÓŁT ĄĆĘĘŚŁĆŻŹÓŃÓŚŃŻŹŁĆĄŚĘÓŚĄ.";
-    size_t chunkSize = 32; // based on MTU size and performance
+    String message = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    size_t chunkSize = 2; // based on MTU size and performance
     size_t messageSize = 0;
     size_t bytesSent = 0;
     bool transferInProgress = false;
@@ -155,7 +156,7 @@ class TimeSyncCallbacks : public NimBLECharacteristicCallbacks {
 unsigned long getCurrentTime() {
     if (syncedTime == 0) {
         // Not synchronized
-        Serial.println("Time not synchronized");
+        // Serial.println("Time not synchronized");
         return 0;
     }
 
@@ -181,24 +182,25 @@ void setup() {
 
         pService = pServer->createService(SERVICE_UUID);
 
+    
         pMessageTransferCharacteristic = pService->createCharacteristic(
             MESSAGE_TRANSFER_UUID,
             NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
-            );
+        );
         pMessageTransferCharacteristic->setCallbacks(new MessageTransferCallbacks());
 
         confirmationCallbacks = new ConfirmationCallbacks();
         pConfirmationCharacteristic = pService->createCharacteristic(
             CONFIRMATION_UUID,
             NIMBLE_PROPERTY::WRITE
-            );
+        );
         pConfirmationCharacteristic->setCallbacks(confirmationCallbacks);
 
         timeSyncCallbacks = new TimeSyncCallbacks();
         pTimeSyncCharacteristic = pService->createCharacteristic(
             TIME_SYNC_UUID,
             NIMBLE_PROPERTY::WRITE
-            );
+        );
         pTimeSyncCharacteristic->setCallbacks(timeSyncCallbacks);
 
     pService->start();
