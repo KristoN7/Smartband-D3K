@@ -20,9 +20,6 @@
 //Time, note: send bytes in Little Endian
 #include <time.h>
 
-//Testing
-#include "heartRate.h"
-
 //Working states 
 #define LED_PIN_IDLE 15
 #define LED_PIN_BLE 2
@@ -168,7 +165,7 @@ void collectAndSaveData() {
 
     int16_t ax, ay, az; //accelerometer data
     int16_t gx, gy, gz; //gyroscope data
-    //sensorMPU.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+    sensorMPU.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
 
     Serial.println(irValue);
     // Saving the data to file in a new row
@@ -499,7 +496,7 @@ void setup() {
     }
     sensorMAX.setup(); // Configure sensor with default settings
     sensorMAX.setPulseAmplitudeRed(60);
-    //sensorMAX.setPulseAmplitudeIR(0x0A);
+    //sensorMAX.setPulseAmplitudeIR(0x0A); //dont need to set it, the default setting have IR powered already
     sensorMAX.setSampleRate(0x18);
     sensorMAX.setFIFOAverage(8);
 
