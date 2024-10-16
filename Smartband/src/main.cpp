@@ -97,20 +97,14 @@ const int samplingRateInMillis = 10;
 unsigned long syncedTime = 0; // time synchronized using app's time (UNIX timestamp)
 unsigned long lastSyncMillis = 0; // time in milliseconds when synchronization occurred
 
-//JSON (withheld)
+//For checking if a device is actually worn (in case of false going into TRAINING mode)
+bool checkIfIsWorn = false;
+unsigned long trainingStartTime = 0;
+bool smartbandWorn = true; // flag to monitor if the device is on hand during a period of time
 
-/*
-StaticJsonDocument<2048> jsonDocument;
-JsonArray irArray = jsonDocument.createNestedArray("IR");
-JsonArray redArray = jsonDocument.createNestedArray("Red");
-JsonArray axArray = jsonDocument.createNestedArray("Ax");
-JsonArray ayArray = jsonDocument.createNestedArray("Ay");
-JsonArray azArray = jsonDocument.createNestedArray("Az");
-JsonArray gxArray = jsonDocument.createNestedArray("Gx");
-JsonArray gyArray = jsonDocument.createNestedArray("Gy");
-JsonArray gzArray = jsonDocument.createNestedArray("Gz");
-int readingsCounter = 0;
-*/
+//For checking if any device connects with smartband through BLE
+unsigned long bleDisconnection = 0; //when this reaches the bleTimeout, the device goes from BLE to IDLE state
+const unsigned long bleTimeout = 25000;
 
 //FUNCTIONS
 
@@ -192,57 +186,14 @@ void endTraining() {
     //TODO: check if closed properly
 }
 
-
-//CSV to JSON withheld on ESP32 because of memory constraints. Moved to the app. Also this method never worked, becuase of limited ways to modify json files
-/*
-void convertCsvToJson(const char* csvFilename, const char* jsonFilename) {
-    File csvFile = SD.open(csvFilename, FILE_READ);
-    if (!csvFile) {
-        Serial.println("Failed to open CSV file for reading");
-        return;
+bool isWorn() {
+    long irValue = sensorMAX.getIR();
+    if (irValue < 5000) { //TODO: Check if this value is good
+        return false; 
+    } else {
+        return true;
     }
-    File jsonFile = SD.open(jsonFilename, FILE_WRITE);
-    if (!jsonFile) {
-        Serial.println("Failed to open JSON file for writing");
-        csvFile.close();
-        return;
-    }
-    jsonFile.println("{");
-    jsonFile.println("\"IR\": [");
-    jsonFile.println("\"RED\": [");
-    jsonFile.println("\"Ax\": [");
-    jsonFile.println("\"Ay\": [");
-    jsonFile.println("\"Az\": [");
-    jsonFile.println("\"Gx\": [");
-    jsonFile.println("\"Gy\": [");
-    jsonFile.println("\"Gz\": [");
-
-    while (csvFile.available()) {
-        String line = csvFile.readStringUntil('\n');
-        line.trim();
-        if (line.length() == 0) continue;  
-        char lineArray[line.length() + 1];
-        line.toCharArray(lineArray, line.length() + 1);
-        int index = 0;
-        char* value = strtok(lineArray, ",");
-        while (value != nullptr) {
-            jsonFile.print(value);
-            value = strtok(nullptr, ",");
-            if (value != nullptr) {
-                jsonFile.print(",");
-            }
-            index++;
-        }
-        jsonFile.println();
-    }
-
-    jsonFile.println("]");
-    jsonFile.println("}");
-    csvFile.close();
-    jsonFile.close();
-    Serial.println("CSV file successfully converted to JSON");
 }
-*/
 
 //Wifi connection withheld, all data is being send through BLE. 
 void connectToWiFi() {
@@ -277,10 +228,12 @@ void connectToWiFi() {
 class ServerCallbacks: public NimBLEServerCallbacks {
     void onConnect(NimBLEServer* pServer) override {
         deviceConnected = true;
+        bleDisconnection = 0;
         Serial.println("Client connected.");
     };
 
     void onDisconnect(NimBLEServer* pServer) override {
+        bleDisconnection = millis();
         deviceConnected = false;
         Serial.println("Client disconnected.");
     }
@@ -616,6 +569,7 @@ if (buttonInterruptOccurred || buttonPressed) {
                 digitalWrite(LED_PIN_TRAINING, LOW);
                 
                 endTraining();  // closing the CSV file
+                checkIfIsWorn = false;
                 //convertCsvToJson(filename, filenameJSON);  // JSON conversion, moved to mobile apps      
 
                 if (pServer != nullptr || pAdvertising != nullptr || pService != nullptr) {
@@ -665,6 +619,8 @@ if (buttonInterruptOccurred || buttonPressed) {
                 if (!SD.begin(CS_PIN)) {
                     Serial.println("Card Mount Failed");
                 }
+
+                checkIfIsWorn = false;
 
                 // Todo: connect mobile phone to ESP32 during this state
 
@@ -718,6 +674,8 @@ if (buttonInterruptOccurred || buttonPressed) {
                 pAdvertising->start();
                 }
 
+                bleDisconnection = millis();
+
                 Serial.println("BLE mode activated and advertising started");
             break;
 
@@ -762,8 +720,8 @@ if (buttonInterruptOccurred || buttonPressed) {
                     Serial.println("Card Mount Failed");
                 } else {
                     Serial.println("Training mode - SD logging started");
-                    //To do, check if data is collected
-                    startTraining();
+                    checkIfIsWorn = true;
+                    trainingStartTime = millis();
                 }
                 break;
 
@@ -774,85 +732,43 @@ if (buttonInterruptOccurred || buttonPressed) {
                 digitalWrite(LED_PIN_IDLE, LOW);
                 digitalWrite(LED_PIN_BLE, LOW);
                 digitalWrite(LED_PIN_TRAINING, LOW);
+                checkIfIsWorn = false;
                 //Todo, adjust state 3
                 break;
         }
     }
 
-    if(currentState == TRAINING){
+    if(checkIfIsWorn){
+        if(!isWorn()){
+            if(millis() - trainingStartTime >= 15000){ //15 seconds
+                Serial.println("Device is not worn, proceeding to IDLE");
+                currentState = IDLE;
+                stateChanged = true;
+                checkIfIsWorn = false;
+            }
+        }
+        else{
+            startTraining();
+            checkIfIsWorn = false;
+        }
+        
+    }
 
+    if(currentState == TRAINING && !checkIfIsWorn){
         sampleStartTime = millis();
         collectAndSaveData();
 
         do{
             sampleEndTime = millis();
-            //Serial.println(sampleEndTime - sampleStartTime);
         } while (sampleEndTime - sampleStartTime < samplingRateInMillis); // 10 miliseconds = 100Hz sampling rate
         
-        //this methord saved data to json in batches, creating multiple json objects in one file, changed to csv files
-        // // Fetch data from MAX30102 sensor 
-        // long irValue = particleSensor.getIR();
-        // long redValue = particleSensor.getRed();
-
-        // // Fetch data from MPU6050 sensor
-        // int16_t ax, ay, az;
-        // int16_t gx, gy, gz;
-        // sensorMPU.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
-
-        // // Add data to corresponding arrays
-        // irArray.add(irValue);
-        // redArray.add(redValue);
-        // axArray.add(ax);
-        // ayArray.add(ay);
-        // azArray.add(az);
-        // gxArray.add(gx);
-        // gyArray.add(gy);
-        // gzArray.add(gz);
-
-        // readingsCounter++;
-
-        // // Serial print the raw data
-        // Serial.print("IR: ");
-        // Serial.print(irValue);
-        // Serial.print("\tRed: ");
-        // Serial.print(redValue);
-        // Serial.print("\tAx: ");
-        // Serial.print(ax);
-        // Serial.print("\tAy: ");
-        // Serial.print(ay);
-        // Serial.print("\tAz: ");
-        // Serial.print(az);
-        // Serial.print("\tGx: ");
-        // Serial.print(gx);
-        // Serial.print("\tGy: ");
-        // Serial.print(gy);
-        // Serial.print("\tGz: ");
-        // Serial.println(gz);
-
-        // if (readingsCounter >= 100) {  //100 samples are equal to 1 second of work time
-        //     File dataFile = SD.open(filename, FILE_APPEND);
-        //     if (dataFile) {
-        //         serializeJson(jsonDocument, dataFile);
-        //         dataFile.println(); 
-        //         dataFile.close();
-        //         Serial.println("Batch of data written to SD card in JSON format");
-
-        //         // Clear arrays for next batch
-        //         jsonDocument.clear();
-        //         irArray = jsonDocument.createNestedArray("IR");
-        //         redArray = jsonDocument.createNestedArray("Red");
-        //         axArray = jsonDocument.createNestedArray("Ax");
-        //         ayArray = jsonDocument.createNestedArray("Ay");
-        //         azArray = jsonDocument.createNestedArray("Az");
-        //         gxArray = jsonDocument.createNestedArray("Gx");
-        //         gyArray = jsonDocument.createNestedArray("Gy");
-        //         gzArray = jsonDocument.createNestedArray("Gz");
-        //         readingsCounter = 0;
-        //     } else {
-        //         Serial.println("Failed to open file for appending");
-        //     }
-        // }
-
-        //delay(10); // Change to milis() for proper sampling rate
+    }
+    
+    if(currentState == BLE && !deviceConnected){
+        if(millis() - bleDisconnection >= bleTimeout){
+            Serial.println("No connection for a longer time, switching to IDLE");
+            currentState = IDLE;
+            stateChanged = true;
+        }
     }
 }
