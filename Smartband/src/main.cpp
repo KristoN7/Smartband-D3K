@@ -101,10 +101,11 @@ unsigned long lastSyncMillis = 0; // time in milliseconds when synchronization o
 bool checkIfIsWorn = false;
 unsigned long trainingStartTime = 0;
 bool smartbandWorn = true; // flag to monitor if the device is on hand during a period of time
+unsigned long smartbandTakenOffTime = 0;
 
 //For checking if any device connects with smartband through BLE
 unsigned long bleDisconnection = 0; //when this reaches the bleTimeout, the device goes from BLE to IDLE state
-const unsigned long bleTimeout = 25000;
+const unsigned long bleTimeout = 180000;
 
 //FUNCTIONS
 
@@ -149,7 +150,7 @@ void startTraining() {
     // CSV header
      dataFile.printf("Training start time (UTC): %s\n", timeString); //UTC
     dataFile.printf("%lu\n", trainingStartTime); //UNIX
-    dataFile.println("IR,RED,Ax,Ay,Az,Gx,Gy,Gz");
+    dataFile.println("IR,RED,Ax,Ay,Az");
 }
 
 void collectAndSaveData() {
@@ -158,10 +159,25 @@ void collectAndSaveData() {
     long redValue = sensorMAX.getRed();
 
     int16_t ax, ay, az; //accelerometer data
-    int16_t gx, gy, gz; //gyroscope data
-    sensorMPU.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+    //int16_t gx, gy, gz; //gyroscope data
+    //sensorMPU.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+    sensorMPU.getAcceleration(&ax, &ay, &az);
 
-    Serial.println(irValue);
+    if(irValue < 5000 && smartbandTakenOffTime == 0){
+        smartbandTakenOffTime = millis();
+    } 
+    else if(irValue < 5000 && millis() - smartbandTakenOffTime >= 15000 && smartbandTakenOffTime > 0){ //15 seconds
+        Serial.println("Device is not worn, proceeding to IDLE");
+        currentState = IDLE;
+        stateChanged = true;
+        smartbandTakenOffTime = 0;
+    }
+        
+    else if(smartbandTakenOffTime > 0 && irValue>=5000){
+        smartbandTakenOffTime = 0;
+    }
+        
+
     // Saving the data to file in a new row
     dataFile.print(irValue);
     dataFile.print(",");
@@ -171,13 +187,13 @@ void collectAndSaveData() {
     dataFile.print(",");
     dataFile.print(ay);
     dataFile.print(",");
-    dataFile.print(az);
-    dataFile.print(",");
-    dataFile.print(gx);
-    dataFile.print(",");
-    dataFile.print(gy);
-    dataFile.print(",");
-    dataFile.println(gz);
+    dataFile.println(az);
+    //dataFile.print(",");
+    // dataFile.print(gx);
+    // dataFile.print(",");
+    // dataFile.print(gy);
+    // dataFile.print(",");
+    // dataFile.println(gz);
     
 }
 
@@ -760,6 +776,7 @@ if (buttonInterruptOccurred || buttonPressed) {
 
         do{
             sampleEndTime = millis();
+            //Serial.println(sampleEndTime - sampleStartTime);
         } while (sampleEndTime - sampleStartTime < samplingRateInMillis); // 10 miliseconds = 100Hz sampling rate
         
     }
