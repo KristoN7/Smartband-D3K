@@ -130,6 +130,7 @@ void signalError(int errorCode) {
 
 void IRAM_ATTR handleButtonPress() { //changing between states is possible after 2 seconds delay
     buttonInterruptOccurred = true; //all the code moved to loop() because of interruption timeout (program took to long while interruption)
+
 }
 
 unsigned long getCurrentTime() {
@@ -483,10 +484,9 @@ void setup() {
         signalError(ERROR_SENSOR_MAX30102);
     }
     sensorMAX.setup(); // Configure sensor with default settings
-    sensorMAX.setPulseAmplitudeRed(60);
-    //sensorMAX.setPulseAmplitudeIR(0x0A); //dont need to set it, the default setting have IR powered already
-    sensorMAX.setSampleRate(0x18);
-    sensorMAX.setFIFOAverage(8);
+    sensorMAX.setPulseAmplitudeRed(0);
+    sensorMAX.setPulseAmplitudeIR(0);
+
 
     // MPU6050 initialization
     sensorMPU.initialize();
@@ -494,6 +494,7 @@ void setup() {
         Serial.println("MPU6050 connection failed. Check wiring.");
         signalError(ERROR_SENSOR_MPU6050);
     }
+    sensorMPU.setSleepEnabled(true);
 
     // SD card module initalization
     while (!SD.begin(CS_PIN)) {
@@ -636,9 +637,15 @@ if (buttonInterruptOccurred || buttonPressed) {
 
                 SD.end();
                 
-                // Todo: disable MAX30102 and MPU6050
+                sensorMAX.setPulseAmplitudeRed(0);
+                sensorMAX.setPulseAmplitudeIR(0);
+                sensorMPU.setSleepEnabled(true);
 
                 Serial.println("Idle mode");
+
+                esp_sleep_enable_ext0_wakeup(GPIO_NUM_13, 0);  // 0 = LOW level to trigger wakeup
+
+                esp_light_sleep_start();  // Device will sleep here until GPIO13 wakes it
                 break;
 
             case BLE: // BLE state, BLE server is on, should broadcast
@@ -652,13 +659,15 @@ if (buttonInterruptOccurred || buttonPressed) {
                     stateChanged = true;
                 }
 
+                endTraining();  // closing the CSV file
+
                 checkIfIsWorn = false;
 
                 // Todo: connect mobile phone to ESP32 during this state
 
                 if (pAdvertising->isAdvertising() == false or pAdvertising == nullptr or pServer == nullptr or pService == nullptr) {
                     
-                NimBLEDevice::init("ESP32_Smartband_mini");
+                NimBLEDevice::init("ESP32 D3K");
 
                 pServer = NimBLEDevice::createServer();
                 pServer->setCallbacks(new ServerCallbacks());
@@ -708,10 +717,22 @@ if (buttonInterruptOccurred || buttonPressed) {
 
                 bleDisconnection = millis();
 
+                sensorMAX.setPulseAmplitudeRed(0);
+                sensorMAX.setPulseAmplitudeIR(0);
+                sensorMPU.setSleepEnabled(true);
+
                 Serial.println("BLE mode activated and advertising started");
             break;
 
             case TRAINING: // Exercise state, collect data from sensors
+
+                sensorMAX.setup(); // Configure sensor with default settings
+                sensorMAX.setPulseAmplitudeRed(60);
+                //sensorMAX.setPulseAmplitudeIR(0x0A); //dont need to set it, the default setting have IR powered already
+                sensorMAX.setSampleRate(0x18);
+                sensorMAX.setFIFOAverage(8);
+                sensorMPU.setSleepEnabled(false);
+
                 digitalWrite(LED_PIN_IDLE, LOW);
                 digitalWrite(LED_PIN_BLE, LOW);
                 digitalWrite(LED_PIN_TRAINING, HIGH);
