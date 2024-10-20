@@ -26,6 +26,12 @@
 #define LED_PIN_TRAINING 4
 #define BUTTON_PIN 13
 
+//Error codes
+#define ERROR_SD_NOT_FOUND 1
+#define ERROR_SD_CORRUPT 2
+#define ERROR_SENSOR_MPU6050 3
+#define ERROR_SENSOR_MAX30102 4
+
 enum DeviceState
 {
     IDLE = 0,
@@ -33,23 +39,23 @@ enum DeviceState
     TRAINING = 2,
     ERROR = 3
 };
-volatile DeviceState currentState = IDLE; //0 - IDLE, 1 - BLE, 2 - Collecting and saving sensor data TODO: change to ENUM
+volatile DeviceState currentState = IDLE; //0 - IDLE, 1 - BLE, 2 - Collecting and saving sensor data
 volatile bool stateChanged = false;
 volatile bool buttonInterruptOccurred = false;
 
-volatile bool buttonPressed = false;  // Zmienna śledząca stan przycisku
-const unsigned long stateChangeDelay = 1000;  // Czas opóźnienia między zmianami stanów (1 sekunda)
+volatile bool buttonPressed = false;  // button state (pressed (held) or not pressed)
+const unsigned long stateChangeDelay = 1000;  // a delay between IDLE and BLE states, so the user won't spam the button
 const int debounceDelay = 250; // to eliminate debouncing effect on physical switch (ms)
 volatile unsigned long lastDebounceTime = 0;
-const unsigned long longPressThreshold = 2000;  // Czas trzymania dla "long press" (2 sekundy)
-unsigned long buttonPressTime = 0;  // Czas wciśnięcia przycisku
-unsigned long lastStateChangeTime = 0;  // Czas ostatniej zmiany stanu
+const unsigned long longPressThreshold = 2000;  // long press, for entering the TRAINING STATE in miliseconds (2 seconds)
+unsigned long buttonPressTime = 0;  // time, when the button was pressed
+unsigned long lastStateChangeTime = 0;  // time since the last state change, for delaying state entering
 
 // UUIDs for BLE Service and Characteristics
-#define SERVICE_UUID        "12345678-1234-1234-1234-123456789012"
+#define SERVICE_UUID        "12345678-1234-1234-1234-123456789012" //012
 #define SSID_CHAR_UUID      "e2e3f5a4-8c4f-11eb-8dcd-0242ac130003"
 #define PASSWORD_CHAR_UUID  "e2e3f5a4-8c4f-11eb-8dcd-0242ac130004"
-#define FILE_TRANSFER_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130005"
+#define FILE_TRANSFER_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130005" //05
 #define CONFIRMATION_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130006"  // confirmation from app regarding file transmission success
 #define TIME_SYNC_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130007"
 
@@ -109,6 +115,19 @@ const unsigned long bleTimeout = 180000;
 
 //FUNCTIONS
 
+void signalError(int errorCode) {
+    for (int i = 0; i < errorCode; i++) {
+        digitalWrite(LED_PIN_BLE, HIGH);
+        digitalWrite(LED_PIN_TRAINING, HIGH);
+        delay(500);
+        digitalWrite(LED_PIN_BLE, LOW);
+        digitalWrite(LED_PIN_TRAINING, LOW);
+        delay(500);
+    }
+    delay(2000); 
+}
+
+
 void IRAM_ATTR handleButtonPress() { //changing between states is possible after 2 seconds delay
     buttonInterruptOccurred = true; //all the code moved to loop() because of interruption timeout (program took to long while interruption)
 }
@@ -132,10 +151,6 @@ void startTraining() {
           snprintf(filename, sizeof(filename), "/training_%d.csv", fileIndex++); 
     } while (SD.exists(filename));
         
-    //do {
-    //      snprintf(filenameJSON, sizeof(filename), "/training_%d.json", fileIndex++); 
-    //} while (SD.exists(filename));
-
     dataFile = SD.open(filename, FILE_WRITE);
     if (!dataFile) {
         Serial.println("Failed to open file for writing");
@@ -148,8 +163,9 @@ void startTraining() {
     strftime(timeString, sizeof(timeString), "%Y-%m-%d %H:%M:%S", timeInfo);
 
     // CSV header
-     dataFile.printf("Training start time (UTC): %s\n", timeString); //UTC
-    dataFile.printf("%lu\n", trainingStartTime); //UNIX
+    //dataFile.printf("Training start time (UTC): %s\n", timeString); //UTC
+    dataFile.printf("%s\n", timeString); //UTC
+    //dataFile.printf("%lu\n", trainingStartTime); //UNIX
     dataFile.println("IR,RED,Ax,Ay,Az");
 }
 
@@ -302,7 +318,10 @@ public:
     void onRead(NimBLECharacteristic* pCharacteristic) override {
         if (!transferInProgress && !sendEndMessage) {
             if (!SD.begin(CS_PIN)) {
-            Serial.println("Card Mount Failed");
+                Serial.println("Card Mount Failed");
+                currentState = ERROR;
+                stateChanged = true;
+                return;
             }
             sendNextFile();
         }
@@ -459,9 +478,9 @@ void setup() {
     digitalWrite(LED_PIN_TRAINING, LOW);
 
     // MAX30102 initialization
-    if (!sensorMAX.begin(Wire, I2C_SPEED_FAST)) {
+    while(!sensorMAX.begin(Wire, I2C_SPEED_FAST)) {
         Serial.println("MAX30102 not found. Check wiring.");
-        while (1);
+        signalError(ERROR_SENSOR_MAX30102);
     }
     sensorMAX.setup(); // Configure sensor with default settings
     sensorMAX.setPulseAmplitudeRed(60);
@@ -471,14 +490,15 @@ void setup() {
 
     // MPU6050 initialization
     sensorMPU.initialize();
-    if (!sensorMPU.testConnection()) {
+    while(!sensorMPU.testConnection()) {
         Serial.println("MPU6050 connection failed. Check wiring.");
-        while (1);
+        signalError(ERROR_SENSOR_MPU6050);
     }
 
     // SD card module initalization
     while (!SD.begin(CS_PIN)) {
         Serial.println("Card Mount Failed");
+        signalError(ERROR_SD_NOT_FOUND);
     }
 
     uint8_t cardType = SD.cardType();
@@ -514,7 +534,7 @@ void setup() {
     digitalWrite(LED_PIN_BLE, LOW);
     digitalWrite(LED_PIN_TRAINING, LOW);
     SD.end();
-    Serial.println("Idle mode");
+    Serial.println("Initial idle mode");
 }
 
 void loop() {
@@ -524,29 +544,24 @@ if (buttonInterruptOccurred || buttonPressed) {
 
     unsigned long currentTime = millis();
 
-    // Sprawdzenie debouncingu - tylko jeśli od ostatniej zmiany minął czas debounceDelay
+    // debounce check
     if ((currentTime - lastDebounceTime) > debounceDelay) { 
-            Serial.print("Button pressed, time: "); 
-            Serial.println(currentTime);
-
-        lastDebounceTime = currentTime;  // Aktualizacja czasu debouncingu
+        lastDebounceTime = currentTime;  // debounce time
 
         if (digitalRead(BUTTON_PIN) == LOW && !buttonPressed) {
-            // Przycisk został wciśnięty - stan LOW
-            Serial.println("Stan button pressed");
-            buttonPressed = true;  // Aktualizuj stan przycisku
-            buttonPressTime = currentTime;  // Zapisz czas, kiedy przycisk został wciśnięty
+            //button pressed, LOW
+            buttonPressed = true; 
+            buttonPressTime = currentTime;
         } 
         else if (digitalRead(BUTTON_PIN) == HIGH && buttonPressed) {
-            // Przycisk został puszczony - stan HIGH
-            Serial.println("Stan button not pressed");
-            buttonPressed = false;  // Aktualizuj stan przycisku
+            //button not pressed, HIGH
+            buttonPressed = false;
 
-            // Sprawdzenie czy przycisk był krótkim kliknięciem czy długim przytrzymaniem
+            // check if it was short or long press
             if (currentTime - buttonPressTime < longPressThreshold) {
-                // Krótkie kliknięcie (mniej niż longPressThreshold)
+                // short press
                 if (currentTime - lastStateChangeTime > stateChangeDelay) {
-                    // Zmiana stanów, ale tylko jeśli minęły przynajmniej 2 sekundy od ostatniej zmiany
+                    // shor press, but change only if 1 second has passed since the last state change
                     if (currentState == IDLE) {
                         currentState = BLE;
                     } else if (currentState == BLE) {
@@ -554,17 +569,17 @@ if (buttonInterruptOccurred || buttonPressed) {
                     } else if (currentState == TRAINING) {
                         currentState = IDLE;
                     }
-                    lastStateChangeTime = currentTime;  // Zaktualizuj czas zmiany stanu
+                    lastStateChangeTime = currentTime; 
                 }
             } else if(currentState != TRAINING){
-                // Przycisk był wciśnięty przez dłużej niż 3 sekundy - "long press"
-                currentState = TRAINING;  // Zmień stan na 2
-                lastStateChangeTime = currentTime;  // Zaktualizuj czas zmiany stanu
+                // long press
+                currentState = TRAINING;  
+                lastStateChangeTime = currentTime; 
             }
             else{
                 currentState = IDLE;
             }
-            stateChanged = true;  // Ustaw flagę zmiany stanu
+            stateChanged = true; 
         }
         else if(digitalRead(BUTTON_PIN) == LOW && buttonPressed && currentTime - buttonPressTime >= longPressThreshold && currentState != TRAINING){
             currentState = TRAINING;
@@ -574,7 +589,6 @@ if (buttonInterruptOccurred || buttonPressed) {
         }
     }
 }
-
 
     if (stateChanged) {
         stateChanged = false;
@@ -634,6 +648,8 @@ if (buttonInterruptOccurred || buttonPressed) {
 
                 if (!SD.begin(CS_PIN)) {
                     Serial.println("Card Mount Failed");
+                    currentState = ERROR;
+                    stateChanged = true;
                 }
 
                 checkIfIsWorn = false;
@@ -642,7 +658,7 @@ if (buttonInterruptOccurred || buttonPressed) {
 
                 if (pAdvertising->isAdvertising() == false or pAdvertising == nullptr or pServer == nullptr or pService == nullptr) {
                     
-                NimBLEDevice::init("D3K Smartband");
+                NimBLEDevice::init("ESP32_Smartband_mini");
 
                 pServer = NimBLEDevice::createServer();
                 pServer->setCallbacks(new ServerCallbacks());
@@ -734,6 +750,8 @@ if (buttonInterruptOccurred || buttonPressed) {
 
                 if (!SD.begin(CS_PIN)) {
                     Serial.println("Card Mount Failed");
+                    currentState = ERROR;
+                    stateChanged = true;
                 } else {
                     Serial.println("Training mode - SD logging started");
                     checkIfIsWorn = true;
@@ -742,6 +760,14 @@ if (buttonInterruptOccurred || buttonPressed) {
                 break;
 
             case ERROR:
+                while(!SD.begin(CS_PIN)) {
+                    Serial.println("Card Mount Failed");
+                    signalError(ERROR_SD_NOT_FOUND);
+                }
+
+                currentState = IDLE;
+                stateChanged = true;
+
                 break;
 
             default:
@@ -749,7 +775,6 @@ if (buttonInterruptOccurred || buttonPressed) {
                 digitalWrite(LED_PIN_BLE, LOW);
                 digitalWrite(LED_PIN_TRAINING, LOW);
                 checkIfIsWorn = false;
-                //Todo, adjust state 3
                 break;
         }
     }
