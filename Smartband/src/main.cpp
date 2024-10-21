@@ -32,7 +32,7 @@ NimBLECharacteristicCallbacks* confirmationCallbacks = nullptr;
 NimBLECharacteristicCallbacks* timeSyncCallbacks = nullptr;
 bool deviceConnected = false;
 
-uint16_t currentMTUSize = 30;
+uint16_t currentMTUSize = 24;
 
 //For time counter in UTC format
 unsigned long syncedTime = 0; // time synchronized using app's time (UNIX timestamp)
@@ -69,6 +69,7 @@ private:
 
 public:
     void onRead(NimBLECharacteristic* pCharacteristic) override {
+        chunkSize = currentMTUSize - 3;
         if (!transferInProgress && !sendEndMessage) {
             startMessageTransfer(message);
         }
