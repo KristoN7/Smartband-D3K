@@ -30,27 +30,35 @@ NimBLECharacteristicCallbacks* confirmationCallbacks = nullptr;
 NimBLECharacteristicCallbacks* timeSyncCallbacks = nullptr;
 bool deviceConnected = false;
 
+uint16_t currentMTUSize = 23;
+
 //For time counter in UTC format
 unsigned long syncedTime = 0; // time synchronized using app's time (UNIX timestamp)
 unsigned long lastSyncMillis = 0; // time in milliseconds when synchronization occurred
 unsigned long time1; //for displaying time in loop()
 
 class ServerCallbacks: public NimBLEServerCallbacks {
-    void onConnect(NimBLEServer* pServer) override {
+    void onConnect(NimBLEServer* pServer, ble_gap_conn_desc* desc) override {
         deviceConnected = true;
         Serial.println("Client connected.");
-    };
+
+        // You can check the MTU size after the connection has been established
+        currentMTUSize= pServer->getPeerMTU(desc->conn_handle);
+        Serial.print("Negotiated MTU size: ");
+        Serial.println(currentMTUSize);
+    }
 
     void onDisconnect(NimBLEServer* pServer) override {
         deviceConnected = false;
         Serial.println("Client disconnected.");
     }
+
 };
 
 class MessageTransferCallbacks : public NimBLECharacteristicCallbacks {
 private:
     String message = "1970-01-01 01:00:00\nIR,RED,Ax,Ay,Az\n6213,8447,1212,1404,16320\n8623,13290,1432,1384,16096\n11467,19230,1516,1248,16144\n14751,26472,1148,1256,16012\n18845,36170,956,1512,16276\n24059,48666,812,1428,16360\n30245,63505,920,1332,16508\n36968,79137,964,1412,16408\n43246,93696,952,1332,16276\n48949,108681,1056,1300,16052\n54289,123951,1192,1348,16148\n59101,137182,988,1404,16292\n62486,147352,820,1316,16464\n65579,155525,872,1372,16252\n67712,160586,1052,1424,16304\n69141,163993,1104,1344,16184\n69965,165873,1048,1436,16356\n70056,165437,788,1472,16484\n68354,160624,788,1352,16344\n63723,148544,1072,1328,16192\n57054,133495,1096,1336,16208\n51498,123223,1012,1320,16092\n48765,119111,1392,1304,16052\n48788,121747,1408,1328,15996\n52521,136009,1220,1416,16368\n61381,156174,1004,1456,16132\n72947,159878,1116,1344,15900\n82711,172704,1676,1112,16888\n85739,176456,636,1492,15776\n90185,181719,-356,1576,16676\n96184,185054,1300,1224,16100\n98153,186204,1324,1428,16172\n99199,186981,980,1412,16368\n100112,187606,732,1296,16228\n100827,188121,588,1272,16224\n101378,188575,600,1416,16520\n101849,188938,380,1444,16388\n102201,189158,684,1464,16356\n102473,189322,1028,1364,16100\n102738,189470,1180,1308,16180\n102940,189531,780,1332,16424\n103085,189539,856,1368,16296\n103212,189571,1240,1240,16268\n103298,189551,1112,1288,16176\n103381,189565,1048,1460,16232\n103459,189583,1064,1328,16300\n103557,189662,1032,1292,16200\n103643,189704,980,1360,16352\n103716,189715,1120,1268,16268\n103790,189759,1128,1332,16264\n103852,189827,1032,1356,16296\n103903,189857,1180,1304,16236\n103962,189913,1324,1328,16300\n104029,189951,1148,1360,16168\n104070,189973,1060,1392,16220\n104130,190011,976,1444,16360\n104137,190033,836,1408,16364\n104156,190059,820,1420,16424\n104186,190065,832,1424,16220\n104230,190081,944,1360,16256\n104266,190096,1044,1188";
-    size_t chunkSize = 32; // based on MTU size and performance
+    size_t chunkSize = currentMTUSize; // based on MTU size and performance
     size_t messageSize = 0;
     size_t bytesSent = 0;
     bool transferInProgress = false;
@@ -219,5 +227,10 @@ void loop() {
     if(getCurrentTime() > 0 && millis() - time1 > 3000){
         Serial.println(getCurrentTime());
         time1 = millis();
+        if (deviceConnected) {
+            // In case you want to retrieve it again
+            Serial.print("Current MTU size: ");
+            Serial.println(currentMTUSize);
+        }
     }
 }
