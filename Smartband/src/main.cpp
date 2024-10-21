@@ -14,9 +14,11 @@
 #define CONFIRMATION_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130006"  // confirmation from app regarding file transmission success
 #define TIME_SYNC_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130007"
 
+#define BLE_ATT_MTU_MAX = 512
 
 //BLUE LED
 #define LED_PIN_BLE 2
+
 
 NimBLEServer* pServer = nullptr;
 NimBLEService* pService = nullptr; 
@@ -38,14 +40,15 @@ unsigned long lastSyncMillis = 0; // time in milliseconds when synchronization o
 unsigned long time1; //for displaying time in loop()
 
 class ServerCallbacks: public NimBLEServerCallbacks {
-    void onConnect(NimBLEServer* pServer, ble_gap_conn_desc* desc) override {
+    void onConnect(NimBLEServer* pServer) override {
         deviceConnected = true;
         Serial.println("Client connected.");
+    }
 
-        // You can check the MTU size after the connection has been established
-        currentMTUSize= pServer->getPeerMTU(desc->conn_handle);
-        Serial.print("Negotiated MTU size: ");
-        Serial.println(currentMTUSize);
+    void onMTUChange(uint16_t MTU, ble_gap_conn_desc* desc) override {
+        Serial.print("MTU size updated to: ");
+        Serial.println(MTU);  // This prints the negotiated MTU size
+        currentMTUSize = MTU;
     }
 
     void onDisconnect(NimBLEServer* pServer) override {
@@ -175,6 +178,7 @@ unsigned long getCurrentTime() {
 
 
 void setup() {
+    
     Serial.begin(115200);
     Serial.println("Starting setup...");
 
@@ -184,6 +188,7 @@ void setup() {
     if (pAdvertising->isAdvertising() == false or pAdvertising == nullptr or pServer == nullptr or pService == nullptr) {
                     
         NimBLEDevice::init("ESP32_Smartband_mini");
+        NimBLEDevice::setMTU(512);
 
         pServer = NimBLEDevice::createServer();
         pServer->setCallbacks(new ServerCallbacks());
@@ -212,6 +217,7 @@ void setup() {
         pTimeSyncCharacteristic->setCallbacks(timeSyncCallbacks);
 
     pService->start();
+
 
     pAdvertising = NimBLEDevice::getAdvertising();
     pAdvertising->addServiceUUID(SERVICE_UUID);
