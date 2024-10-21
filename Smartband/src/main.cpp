@@ -32,6 +32,9 @@
 #define ERROR_SENSOR_MPU6050 3
 #define ERROR_SENSOR_MAX30102 4
 
+//For MTU negotiating
+#define BLE_ATT_MTU_MAX 512
+
 enum DeviceState
 {
     IDLE = 0,
@@ -79,6 +82,7 @@ NimBLECharacteristicCallbacks* fileTransferCallbacks = nullptr;
 NimBLECharacteristicCallbacks* confirmationCallbacks = nullptr;
 NimBLECharacteristicCallbacks* timeSyncCallbacks = nullptr;
 bool deviceConnected = false;
+uint16_t currentMTUSize = 23;
 
 //For wifi connection (withheld)
 String ssid = "";
@@ -194,7 +198,6 @@ void collectAndSaveData() {
         smartbandTakenOffTime = 0;
     }
         
-
     // Saving the data to file in a new row
     dataFile.print(irValue);
     dataFile.print(",");
@@ -270,6 +273,12 @@ class ServerCallbacks: public NimBLEServerCallbacks {
         deviceConnected = false;
         Serial.println("Client disconnected.");
     }
+
+    void onMTUChange(uint16_t MTU, ble_gap_conn_desc* desc) override {
+        Serial.print("MTU size updated to: ");
+        Serial.println(MTU);  // This prints the negotiated MTU size
+        currentMTUSize = MTU;
+    }
 };
 
 //Callback to connect to WiFi, works, but not used
@@ -308,7 +317,7 @@ class CharacteristicCallbacks: public NimBLECharacteristicCallbacks {
 class FileTransferCallbacks : public NimBLECharacteristicCallbacks {
 private:
     File file;
-    size_t chunkSize = 512; // based on MTU size and performance
+    size_t chunkSize = currentMTUSize - 3; // based on MTU size and performance
     size_t fileSize = 0;
     size_t bytesSent = 0;
     bool transferInProgress = false;
@@ -317,6 +326,7 @@ private:
 
 public:
     void onRead(NimBLECharacteristic* pCharacteristic) override {
+        chunkSize = currentMTUSize - 3;
         if (!transferInProgress && !sendEndMessage) {
             if (!SD.begin(CS_PIN)) {
                 Serial.println("Card Mount Failed");
