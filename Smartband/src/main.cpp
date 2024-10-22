@@ -678,11 +678,14 @@ if (buttonInterruptOccurred || buttonPressed) {
                 if (pAdvertising->isAdvertising() == false or pAdvertising == nullptr or pServer == nullptr or pService == nullptr) {
                     
                 NimBLEDevice::init("ESP32 D3K");
+                NimBLEDevice::setMTU(512);
 
                 pServer = NimBLEDevice::createServer();
                 pServer->setCallbacks(new ServerCallbacks());
+                
 
                 pService = pServer->createService(SERVICE_UUID);
+                
 
                 ssidCallbacks = new CharacteristicCallbacks();
                 pSsidCharacteristic = pService->createCharacteristic(
@@ -723,6 +726,8 @@ if (buttonInterruptOccurred || buttonPressed) {
                 pAdvertising = NimBLEDevice::getAdvertising();
                 pAdvertising->addServiceUUID(SERVICE_UUID);
                 pAdvertising->start();
+
+                
                 }
 
                 bleDisconnection = millis();
