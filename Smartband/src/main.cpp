@@ -8,7 +8,7 @@
 #include <SPI.h>
 #include <SD.h>
 
-// Wifi i BLE
+// Wifi and BLE
 #include <WiFi.h>
 #include <NimBLEDevice.h>
 #include <NimBLEUtils.h>
@@ -157,7 +157,7 @@ void startTraining() {
     unsigned long trainingStartTime = getCurrentTime() + 3600; //3600, because Poland is in UTC+1 timezone
 
     do {
-          snprintf(filename, sizeof(filename), "/training_%d.csv", fileIndex++); 
+          snprintf(filename, sizeof(filename), "/training_%d.bin", fileIndex++); 
     } while (SD.exists(filename));
         
     dataFile = SD.open(filename, FILE_WRITE);
@@ -166,16 +166,23 @@ void startTraining() {
         return;
     }
 
+    /* Only UNIX timestamp will be sent
     //Saving time in UTC
     char timeString[30];
     struct tm *timeInfo = gmtime((time_t *)&trainingStartTime);
     strftime(timeString, sizeof(timeString), "%Y-%m-%d %H:%M:%S", timeInfo);
+    */
 
-    // CSV header
+    // CSV header, moved to .BIN files
     //dataFile.printf("Training start time (UTC): %s\n", timeString); //UTC
-    dataFile.printf("%s\n", timeString); //UTC
+    //dataFile.printf("%s\n", timeString); //UTC
     //dataFile.printf("%lu\n", trainingStartTime); //UNIX
-    dataFile.println("IR,RED,Ax,Ay,Az");
+    //dataFile.println("IR,RED,Ax,Ay,Az");
+
+    //UNIX first
+    dataFile.write((uint8_t*)&trainingStartTime, sizeof(trainingStartTime));
+
+    Serial.printf("Started training session: %s, time: %lu\n", filename, trainingStartTime);
 }
 
 void flushBufferToSD() {
@@ -198,8 +205,8 @@ void flushBufferToSD() {
 
 void collectAndBufferData() {
     
-    long irValue = sensorMAX.getIR();
-    long redValue = sensorMAX.getRed();
+    uint32_t irValue = sensorMAX.getIR();
+    uint32_t redValue = sensorMAX.getRed();
 
     int16_t ax, ay, az; //accelerometer data
     //int16_t gx, gy, gz; //gyroscope data
@@ -220,6 +227,22 @@ void collectAndBufferData() {
         smartbandTakenOffTime = 0;
     }
 
+    if (bufferIndex + sizeof(irValue) + sizeof(redValue) + sizeof(ax) * 3 >= bufferSize) {
+        flushBufferToSD();
+    }
+
+    memcpy(&sdBuffer[bufferIndex], &irValue, sizeof(irValue));
+    bufferIndex += sizeof(irValue);
+    memcpy(&sdBuffer[bufferIndex], &redValue, sizeof(redValue));
+    bufferIndex += sizeof(redValue);
+    memcpy(&sdBuffer[bufferIndex], &ax, sizeof(ax));
+    bufferIndex += sizeof(ax);
+    memcpy(&sdBuffer[bufferIndex], &ay, sizeof(ay));
+    bufferIndex += sizeof(ay);
+    memcpy(&sdBuffer[bufferIndex], &az, sizeof(az));
+    bufferIndex += sizeof(az);
+
+    /* CSV files, moved to BIN files
     // Prepare data as a CSV formatted string
     char dataLine[128];  // Assuming each line will not exceed 128 characters
     int len = snprintf(dataLine, sizeof(dataLine), "%ld,%ld,%d,%d,%d\n", irValue, redValue, ax, ay, az);
@@ -233,6 +256,7 @@ void collectAndBufferData() {
     // Append data to the buffer
     memcpy(&sdBuffer[bufferIndex], dataLine, len);
     bufferIndex += len;    
+    */
 }
 
 void endTraining() {
@@ -240,8 +264,9 @@ void endTraining() {
 
     if(dataFile){
         dataFile.close();
+        Serial.println("SD file closed");
     }
-    Serial.println("Training session ended, SD file closed");
+
     //TODO: check if closed properly
 }
 
@@ -415,11 +440,13 @@ public:
     }
 
     void sendEnd(NimBLECharacteristic* pCharacteristic) {
-        const char* endMessage = "END";
-        pCharacteristic->setValue((uint8_t*)endMessage, strlen(endMessage));
+        //const char* endMessage = "END";
+        uint8_t endMessage[4] = {0x00, 0x00, 0x00, 0x00}; //4 bytes of only zeroes, very unlikely for the sensors to give that data
+        //pCharacteristic->setValue((uint8_t*)endMessage, strlen(endMessage));
+        pCharacteristic->setValue(endMessage, sizeof(endMessage));
         pCharacteristic->notify();
 
-        Serial.println("Sent 'END' message");
+        Serial.println("Sent ending message");
 
         // Reset flags to start the sending process again
         sendEndMessage = false;
@@ -442,7 +469,7 @@ public:
         currentFileIndex = 1;
 
         while (true) {
-            snprintf(filename, sizeof(filename), "/training_%d.csv", currentFileIndex);
+            snprintf(filename, sizeof(filename), "/training_%d.bin", currentFileIndex);
             if (SD.exists(filename)) {
                 Serial.print("Found file to send: ");
                 Serial.println(filename);
@@ -850,7 +877,6 @@ if (buttonInterruptOccurred || buttonPressed) {
             startTraining();
             checkIfIsWorn = false;
         }
-        
     }
 
     if(currentState == TRAINING && !checkIfIsWorn){
