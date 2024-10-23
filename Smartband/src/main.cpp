@@ -441,7 +441,7 @@ public:
 
     void sendEnd(NimBLECharacteristic* pCharacteristic) {
         //const char* endMessage = "END";
-        uint8_t endMessage[4] = {0x00, 0x00, 0x00, 0x00}; //4 bytes of only zeroes, very unlikely for the sensors to give that data
+        uint8_t endMessage[16] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}; //4 bytes of only zeroes, very unlikely for the sensors to give that data
         //pCharacteristic->setValue((uint8_t*)endMessage, strlen(endMessage));
         pCharacteristic->setValue(endMessage, sizeof(endMessage));
         pCharacteristic->notify();
