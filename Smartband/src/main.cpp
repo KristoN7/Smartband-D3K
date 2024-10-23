@@ -91,7 +91,6 @@ String password = "";
 MAX30105 sensorMAX;
 MPU6050 sensorMPU;
 
-
 File dataFile;
 char filename[32];
 //char filenameJSON[32];
@@ -116,6 +115,11 @@ unsigned long smartbandTakenOffTime = 0;
 //For checking if any device connects with smartband through BLE
 unsigned long bleDisconnection = 0; //when this reaches the bleTimeout, the device goes from BLE to IDLE state
 const unsigned long bleTimeout = 180000;
+
+//Buffer to SDCard input optimization
+const size_t bufferSize = 8192; // 512 bytes buffer, todo: check if it is proper
+char sdBuffer[bufferSize];  // Buffer to store data before writing to SD card
+size_t bufferIndex = 0;     // Current position in the buffer
 
 //FUNCTIONS
 
@@ -174,7 +178,25 @@ void startTraining() {
     dataFile.println("IR,RED,Ax,Ay,Az");
 }
 
-void collectAndSaveData() {
+void flushBufferToSD() {
+    if (bufferIndex == 0) {
+        return; // Nothing to flush
+    }
+
+    // Ensure SD card is open before writing
+    if (!dataFile) {
+        Serial.println("SD card not ready for writing");
+        return;
+    }
+
+    // Write buffer content to SD card
+    dataFile.write((uint8_t*)sdBuffer, bufferIndex);
+
+    // Clear buffer
+    bufferIndex = 0;
+}
+
+void collectAndBufferData() {
     
     long irValue = sensorMAX.getIR();
     long redValue = sensorMAX.getRed();
@@ -197,28 +219,29 @@ void collectAndSaveData() {
     else if(smartbandTakenOffTime > 0 && irValue>=5000){
         smartbandTakenOffTime = 0;
     }
+
+    // Prepare data as a CSV formatted string
+    char dataLine[128];  // Assuming each line will not exceed 128 characters
+    int len = snprintf(dataLine, sizeof(dataLine), "%ld,%ld,%d,%d,%d\n", irValue, redValue, ax, ay, az);
         
-    // Saving the data to file in a new row
-    dataFile.print(irValue);
-    dataFile.print(",");
-    dataFile.print(redValue);
-    dataFile.print(",");
-    dataFile.print(ax);
-    dataFile.print(",");
-    dataFile.print(ay);
-    dataFile.print(",");
-    dataFile.println(az);
-    //dataFile.print(",");
-    // dataFile.print(gx);
-    // dataFile.print(",");
-    // dataFile.print(gy);
-    // dataFile.print(",");
-    // dataFile.println(gz);
-    
+    // Check if the data fits into the buffer
+    if (bufferIndex + len >= bufferSize) {
+        // Buffer is full, flush to SD card
+        flushBufferToSD();
+    }
+
+    // Append data to the buffer
+    memcpy(&sdBuffer[bufferIndex], dataLine, len);
+    bufferIndex += len;    
 }
 
 void endTraining() {
-    dataFile.close();
+    flushBufferToSD();
+
+    if(dataFile){
+        dataFile.close();
+    }
+    Serial.println("Training session ended, SD file closed");
     //TODO: check if closed properly
 }
 
@@ -727,7 +750,6 @@ if (buttonInterruptOccurred || buttonPressed) {
                 pAdvertising->addServiceUUID(SERVICE_UUID);
                 pAdvertising->start();
 
-                
                 }
 
                 bleDisconnection = millis();
@@ -833,7 +855,7 @@ if (buttonInterruptOccurred || buttonPressed) {
 
     if(currentState == TRAINING && !checkIfIsWorn){
         sampleStartTime = millis();
-        collectAndSaveData();
+        collectAndBufferData();
 
         do{
             sampleEndTime = millis();
