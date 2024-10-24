@@ -25,6 +25,7 @@
 #define LED_PIN_BLE 2
 #define LED_PIN_TRAINING 4
 #define BUTTON_PIN 13
+#define BATTERY_PIN 34  // ADC pin connected to the voltage divider
 
 //Error codes
 #define ERROR_SD_NOT_FOUND 1
@@ -66,7 +67,7 @@ unsigned long lastStateChangeTime = 0;  // time since the last state change, for
 #define CS_PIN 5
 
 // Definitions for voltage divider and Li-Po battery
-#define BATTERY_PIN 34  // ADC pin connected to the voltage divider
+
 #define MAX_ADC_VALUE 4095  // Maximum ADC value for ESP32 (12-bit)
 #define REFERENCE_VOLTAGE 3.3  // Reference voltage for ADC (ESP32 power supply)
 #define R1 1000.0  // R1 = 1 kΩ
@@ -182,10 +183,16 @@ int calculateBatteryPercentage(float batteryVoltage) {
 float readBatteryVoltage() {
     // Read the ADC value
     int adcValue = analogRead(BATTERY_PIN);
+
+        Serial.print("Raw ADC value: ");
+    Serial.println(adcValue);
     
     // Convert ADC value to voltage across the voltage divider
     float voltageDivider = ((float)adcValue / MAX_ADC_VALUE) * REFERENCE_VOLTAGE;
     
+    Serial.print("Voltage at divider: ");
+    Serial.println(voltageDivider);
+
     // Calculate the actual battery voltage based on the voltage divider
     float batteryVoltage = voltageDivider * (R1 + R2) / R2;
     
@@ -939,4 +946,22 @@ if (buttonInterruptOccurred || buttonPressed) {
             stateChanged = true;
         }
     }
+
+    // Read the battery voltage
+    float batteryVoltage = readBatteryVoltage();
+
+    // Calculate the battery percentage
+    int batteryPercentage = calculateBatteryPercentage(batteryVoltage);
+
+    // Display battery voltage and percentage on the Serial Monitor
+    Serial.print("Battery voltage: ");
+    Serial.print(batteryVoltage);
+    Serial.println(" V");
+    
+    Serial.print("Battery percentage: ");
+    Serial.print(batteryPercentage);
+    Serial.println("%");
+    
+
+    delay(5000);  // Read every 5 seconds
 }
