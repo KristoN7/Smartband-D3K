@@ -65,6 +65,17 @@ unsigned long lastStateChangeTime = 0;  // time since the last state change, for
 //SD Card
 #define CS_PIN 5
 
+// Definitions for voltage divider and Li-Po battery
+#define BATTERY_PIN 34  // ADC pin connected to the voltage divider
+#define MAX_ADC_VALUE 4095  // Maximum ADC value for ESP32 (12-bit)
+#define REFERENCE_VOLTAGE 3.3  // Reference voltage for ADC (ESP32 power supply)
+#define R1 1000.0  // R1 = 1 kΩ
+#define R2 2000.0  // R2 = 2 kΩ
+
+// Voltage range for Li-Po battery (full charge and minimum safe voltage)
+#define FULL_BATTERY_VOLTAGE 4.2
+#define LOW_BATTERY_VOLTAGE 3.15  // Minimum safe voltage
+
 //NimBLE pointers
 NimBLEServer* pServer = nullptr;
 NimBLEService* pService = nullptr; 
@@ -151,6 +162,34 @@ unsigned long getCurrentTime() {
     unsigned long elapsedMillis = millis() - lastSyncMillis;
     unsigned long currentTime = syncedTime + elapsedMillis / 1000; // Adding elapsed time to synced time
     return currentTime;
+}
+
+// Function to calculate battery percentage
+int calculateBatteryPercentage(float batteryVoltage) {
+    // Ensure the voltage is within the range from 3.15V to 4.2V
+    if (batteryVoltage >= FULL_BATTERY_VOLTAGE) {
+        return 100;
+    } else if (batteryVoltage <= LOW_BATTERY_VOLTAGE) {
+        return 0;
+    } else {
+        // Calculate the battery percentage
+        float percentage = (batteryVoltage - LOW_BATTERY_VOLTAGE) / (FULL_BATTERY_VOLTAGE - LOW_BATTERY_VOLTAGE) * 100;
+        return (int)percentage;
+    }
+}
+
+// Function to read battery voltage using ADC
+float readBatteryVoltage() {
+    // Read the ADC value
+    int adcValue = analogRead(BATTERY_PIN);
+    
+    // Convert ADC value to voltage across the voltage divider
+    float voltageDivider = ((float)adcValue / MAX_ADC_VALUE) * REFERENCE_VOLTAGE;
+    
+    // Calculate the actual battery voltage based on the voltage divider
+    float batteryVoltage = voltageDivider * (R1 + R2) / R2;
+    
+    return batteryVoltage;
 }
 
 void startTraining() {
@@ -530,6 +569,7 @@ void setup() {
     pinMode(LED_PIN_BLE, OUTPUT);
     pinMode(LED_PIN_TRAINING, OUTPUT);
     pinMode(BUTTON_PIN, INPUT_PULLUP); //using an inner built-in resistor on ESP32
+    pinMode(BATTERY_PIN, INPUT);  // Set up the ADC pin for battery voltage readings
 
     attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), handleButtonPress, CHANGE);
 
@@ -596,6 +636,8 @@ void setup() {
     digitalWrite(LED_PIN_TRAINING, LOW);
     SD.end();
     Serial.println("Initial idle mode");
+
+
 }
 
 void loop() {
