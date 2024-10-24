@@ -947,21 +947,4 @@ if (buttonInterruptOccurred || buttonPressed) {
         }
     }
 
-    // Read the battery voltage
-    float batteryVoltage = readBatteryVoltage();
-
-    // Calculate the battery percentage
-    int batteryPercentage = calculateBatteryPercentage(batteryVoltage);
-
-    // Display battery voltage and percentage on the Serial Monitor
-    Serial.print("Battery voltage: ");
-    Serial.print(batteryVoltage);
-    Serial.println(" V");
-    
-    Serial.print("Battery percentage: ");
-    Serial.print(batteryPercentage);
-    Serial.println("%");
-    
-
-    delay(5000);  // Read every 5 seconds
 }
