@@ -13,11 +13,19 @@
 #define MESSAGE_TRANSFER_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130013"
 #define CONFIRMATION_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130006"  // confirmation from app regarding file transmission success
 #define TIME_SYNC_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130007"
+#define BATT_LEVEL_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130021"
+#define FIRMWARE_VERSION_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130022"
+#define FILES_TO_SEND_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130023"
 
 #define BLE_ATT_MTU_MAX 512
 
 //BLUE LED
 #define LED_PIN_BLE 2
+
+//mock data for characteristics
+int batteryLevel = 76;
+const char* firmwareVersion = "2.5";
+int filesToSend = 1;
 
 uint8_t sampleData[] = {
     0x10, 0x0E, 0x00, 0x00,   //Unix timestamp
@@ -81,13 +89,20 @@ uint8_t sampleData[] = {
 NimBLEServer* pServer = nullptr;
 NimBLEService* pService = nullptr; 
 NimBLEAdvertising* pAdvertising = nullptr; 
+
 NimBLECharacteristic* pMessageTransferCharacteristic = nullptr;
 NimBLECharacteristic* pConfirmationCharacteristic = nullptr;
 NimBLECharacteristic* pTimeSyncCharacteristic = nullptr;
+NimBLECharacteristic* pBatteryStatusCharacteristic = nullptr;
+NimBLECharacteristic* pRevisionNumberCharacteristic = nullptr;
+NimBLECharacteristic* pFilesToSendCharacteristic = nullptr;
 
 NimBLECharacteristicCallbacks* fileTransferCallbacks = nullptr;
 NimBLECharacteristicCallbacks* confirmationCallbacks = nullptr;
 NimBLECharacteristicCallbacks* timeSyncCallbacks = nullptr;
+NimBLECharacteristicCallbacks* batteryStatusCallbacks = nullptr;
+NimBLECharacteristicCallbacks* revisionNumberCallbacks = nullptr;
+NimBLECharacteristicCallbacks* filesToSendCallbacks = nullptr;
 bool deviceConnected = false;
 
 uint16_t currentMTUSize = 24;
@@ -96,6 +111,30 @@ uint16_t currentMTUSize = 24;
 unsigned long syncedTime = 0; // time synchronized using app's time (UNIX timestamp)
 unsigned long lastSyncMillis = 0; // time in milliseconds when synchronization occurred
 unsigned long time1; //for displaying time in loop()
+
+class BatteryStatusCallbacks : public NimBLECharacteristicCallbacks {
+public:
+    void onRead(NimBLECharacteristic* pCharacteristic) override {
+        pCharacteristic->setValue(batteryLevel);
+        Serial.println("Battery status read.");
+    }
+};
+
+class RevisionNumberCallbacks : public NimBLECharacteristicCallbacks {
+public:
+    void onRead(NimBLECharacteristic* pCharacteristic) override {
+        pCharacteristic->setValue(firmwareVersion);
+        Serial.println("Revision number read.");
+    }
+};
+
+class FilesToSendCallbacks : public NimBLECharacteristicCallbacks {
+public:
+    void onRead(NimBLECharacteristic* pCharacteristic) override {
+        pCharacteristic->setValue(filesToSend);
+        Serial.println("Files to send count read.");
+    }
+};
 
 class ServerCallbacks: public NimBLEServerCallbacks {
     void onConnect(NimBLEServer* pServer) override {
@@ -260,6 +299,24 @@ void setup() {
             NIMBLE_PROPERTY::WRITE
         );
         pTimeSyncCharacteristic->setCallbacks(timeSyncCallbacks);
+
+        NimBLECharacteristic* pBatteryStatusCharacteristic = pService->createCharacteristic(
+            BATT_LEVEL_UUID,
+            NIMBLE_PROPERTY::READ
+        );
+        pFilesToSendCharacteristic->setCallbacks(batteryStatusCallbacks); 
+
+        NimBLECharacteristic* pRevisionNumberCharacteristic = pService->createCharacteristic(
+            FIRMWARE_VERSION_UUID,
+            NIMBLE_PROPERTY::READ
+        );
+        pFilesToSendCharacteristic->setCallbacks(revisionNumberCallbacks);
+
+        NimBLECharacteristic* pFilesToSendCharacteristic = pService->createCharacteristic(
+            FILES_TO_SEND_UUID,
+            NIMBLE_PROPERTY::READ
+        );
+        pFilesToSendCharacteristic->setCallbacks(filesToSendCallbacks);
 
     pService->start();
 
