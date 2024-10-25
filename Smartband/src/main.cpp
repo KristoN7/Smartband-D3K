@@ -62,6 +62,9 @@ unsigned long lastStateChangeTime = 0;  // time since the last state change, for
 #define FILE_TRANSFER_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130005" //05
 #define CONFIRMATION_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130006"  // confirmation from app regarding file transmission success
 #define TIME_SYNC_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130007"
+#define BATT_LEVEL_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130021"
+#define FIRMWARE_VERSION_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130022"
+#define FILES_TO_SEND_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130023"
 
 //SD Card
 #define CS_PIN 5
@@ -87,12 +90,19 @@ NimBLECharacteristic* pPasswordCharacteristic = nullptr;
 NimBLECharacteristic* pFileTransferCharacteristic = nullptr;
 NimBLECharacteristic* pConfirmationCharacteristic = nullptr;
 NimBLECharacteristic* pTimeSyncCharacteristic = nullptr;
+NimBLECharacteristic* pBatteryStatusCharacteristic = nullptr;
+NimBLECharacteristic* pRevisionNumberCharacteristic = nullptr;
+NimBLECharacteristic* pFilesToSendCharacteristic = nullptr;
 
 NimBLECharacteristicCallbacks* ssidCallbacks = nullptr;
 NimBLECharacteristicCallbacks* passwordCallbacks = nullptr;
 NimBLECharacteristicCallbacks* fileTransferCallbacks = nullptr;
 NimBLECharacteristicCallbacks* confirmationCallbacks = nullptr;
 NimBLECharacteristicCallbacks* timeSyncCallbacks = nullptr;
+NimBLECharacteristicCallbacks* batteryStatusCallbacks = nullptr;
+NimBLECharacteristicCallbacks* revisionNumberCallbacks = nullptr;
+NimBLECharacteristicCallbacks* filesToSendCallbacks = nullptr;
+
 bool deviceConnected = false;
 uint16_t currentMTUSize = 23;
 
@@ -133,7 +143,30 @@ const size_t bufferSize = 8192; // 512 bytes buffer, todo: check if it is proper
 char sdBuffer[bufferSize];  // Buffer to store data before writing to SD card
 size_t bufferIndex = 0;     // Current position in the buffer
 
+//Firmware (change manually)
+const char* firmwareVersion = "V18";
+
 //FUNCTIONS
+
+int countTrainingFiles() {
+    int fileCount = 0;
+    File root = SD.open("/");
+    
+    while (true) {
+        File entry = root.openNextFile();
+        if (!entry) break;  
+
+        if (!entry.isDirectory()) {
+            String filename = entry.name();
+            if (filename.startsWith("/training_") && filename.endsWith(".bin")) {
+                fileCount++;
+            }
+        }
+        entry.close();
+    }
+    root.close();
+    return fileCount;
+}
 
 void signalError(int errorCode) {
     for (int i = 0; i < errorCode; i++) {
@@ -404,6 +437,33 @@ class CharacteristicCallbacks: public NimBLECharacteristicCallbacks {
             // Attempt to connect to WiFi
             connectToWiFi();
         }
+    }
+};
+
+class BatteryStatusCallbacks : public NimBLECharacteristicCallbacks {
+public:
+    void onRead(NimBLECharacteristic* pCharacteristic) override {
+        float battery = readBatteryVoltage();
+        int battPerc = calculateBatteryPercentage(battPerc);
+        pCharacteristic->setValue(battPerc);
+        Serial.println("Battery status read.");
+    }
+};
+
+class RevisionNumberCallbacks : public NimBLECharacteristicCallbacks {
+public:
+    void onRead(NimBLECharacteristic* pCharacteristic) override {
+        pCharacteristic->setValue(firmwareVersion);
+        Serial.println("Revision number read.");
+    }
+};
+
+class FilesToSendCallbacks : public NimBLECharacteristicCallbacks {
+public:
+    void onRead(NimBLECharacteristic* pCharacteristic) override {
+        int filesToSend = countTrainingFiles();
+        pCharacteristic->setValue(filesToSend);
+        Serial.println("Files to send count read.");
     }
 };
 
@@ -744,6 +804,22 @@ if (buttonInterruptOccurred || buttonPressed) {
                     timeSyncCallbacks = nullptr;
                 }
 
+                if (batteryStatusCallbacks != nullptr){
+                    delete batteryStatusCallbacks;
+                    batteryStatusCallbacks = nullptr;
+                } 
+
+                if (revisionNumberCallbacks != nullptr){
+                    delete revisionNumberCallbacks;
+                    revisionNumberCallbacks = nullptr;
+                } 
+
+
+                if (filesToSendCallbacks != nullptr){
+                    delete filesToSendCallbacks;
+                    filesToSendCallbacks = nullptr;
+                } 
+
                 SD.end();
                 
                 sensorMAX.setPulseAmplitudeRed(0);
@@ -820,6 +896,24 @@ if (buttonInterruptOccurred || buttonPressed) {
                                             NIMBLE_PROPERTY::WRITE);
                 pTimeSyncCharacteristic->setCallbacks(timeSyncCallbacks);
 
+                NimBLECharacteristic* pBatteryStatusCharacteristic = pService->createCharacteristic(
+                    BATT_LEVEL_UUID,
+                    NIMBLE_PROPERTY::READ
+                );
+                pFilesToSendCharacteristic->setCallbacks(batteryStatusCallbacks); 
+
+                NimBLECharacteristic* pRevisionNumberCharacteristic = pService->createCharacteristic(
+                    FIRMWARE_VERSION_UUID,
+                    NIMBLE_PROPERTY::READ
+                );
+                pFilesToSendCharacteristic->setCallbacks(revisionNumberCallbacks);
+
+                NimBLECharacteristic* pFilesToSendCharacteristic = pService->createCharacteristic(
+                    FILES_TO_SEND_UUID,
+                    NIMBLE_PROPERTY::READ
+                );
+                pFilesToSendCharacteristic->setCallbacks(filesToSendCallbacks);
+
                 pService->start();
 
                 pAdvertising = NimBLEDevice::getAdvertising();
@@ -881,6 +975,23 @@ if (buttonInterruptOccurred || buttonPressed) {
                     delete timeSyncCallbacks;
                     timeSyncCallbacks = nullptr;
                 }
+
+                if (batteryStatusCallbacks != nullptr){
+                    delete batteryStatusCallbacks;
+                    batteryStatusCallbacks = nullptr;
+                } 
+
+                if (revisionNumberCallbacks != nullptr){
+                    delete revisionNumberCallbacks;
+                    revisionNumberCallbacks = nullptr;
+                } 
+
+
+                if (filesToSendCallbacks != nullptr){
+                    delete filesToSendCallbacks;
+                    filesToSendCallbacks = nullptr;
+                } 
+
 
                 if (!SD.begin(CS_PIN)) {
                     Serial.println("Card Mount Failed");
