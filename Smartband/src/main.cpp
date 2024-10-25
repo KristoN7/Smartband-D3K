@@ -814,7 +814,6 @@ if (buttonInterruptOccurred || buttonPressed) {
                     revisionNumberCallbacks = nullptr;
                 } 
 
-
                 if (filesToSendCallbacks != nullptr){
                     delete filesToSendCallbacks;
                     filesToSendCallbacks = nullptr;
