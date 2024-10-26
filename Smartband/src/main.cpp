@@ -149,9 +149,33 @@ const String firmwareVersion = "V19";
 
 // Resources: battery level and space on SD card
 unsigned long lastResourceCheckTime = 0;
-const unsigned long resourceCheckInterval = 30000; // co 30 sekund
+const unsigned long resourceCheckInterval = 30000; // 30 seconds
+
+//For checking whether sensors are working properly
+const unsigned long sensorCheckInterval = 20000; // 20 secods
+unsigned long lastSensorCheckTime = 0;
+bool max30102Working = true;
+bool mpu6050Working = true;
 
 //FUNCTIONS
+
+void checkMax30102(uint32_t irValue, uint32_t redValue) {    
+    if (irValue == 0 || redValue == 0) {
+        max30102Working = false;
+        Serial.println("MAX30102 not working properly.");
+    } else {
+        max30102Working = true;
+    }
+}
+
+void checkMpu6050(int16_t ax, int16_t ay, int16_t az) {
+    if (ax == 0 && ay == 0 && az == 0) {
+        mpu6050Working = false;
+        Serial.println("MPU6050 not working properly.");
+    } else {
+        mpu6050Working = true;
+    }
+}
 
 bool isSpaceAvailable() {
     if (!SD.begin(CS_PIN)) {
@@ -310,6 +334,21 @@ void collectAndBufferData() {
     //int16_t gx, gy, gz; //gyroscope data
     //sensorMPU.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
     sensorMPU.getAcceleration(&ax, &ay, &az);
+
+    unsigned long currentTime = millis();
+
+    if (currentTime - lastSensorCheckTime >= sensorCheckInterval) {
+        checkMax30102(irValue, redValue);
+        checkMpu6050(ax, ay, az);
+        lastSensorCheckTime = currentTime;
+
+        if (!max30102Working || !mpu6050Working) {
+            currentState = ERROR;
+            stateChanged = true;
+            flushBufferToSD();
+            return;
+        }
+    }
 
     if(irValue < 5000 && smartbandTakenOffTime == 0){
         smartbandTakenOffTime = millis();
@@ -1092,6 +1131,20 @@ if (buttonInterruptOccurred || buttonPressed) {
                     Serial.println("Not enough storage on SD card. Send training files to app");
                     signalError(ERROR_NO_STORAGE);
                 }
+
+                // MAX30120
+                while(!sensorMAX.begin(Wire, I2C_SPEED_FAST)) {
+                    Serial.println("Failed to initialize MAX30102 sensor.");
+                    signalError(ERROR_SENSOR_MAX30102);
+
+                }
+                // MPU6050
+                if (!sensorMPU.testConnection()) {
+                    Serial.println("Failed to initialize MPU6050 sensor.");
+                    signalError(ERROR_SENSOR_MPU6050);
+                    sensorMPU.initialize();
+                    sensorMPU.setSleepEnabled(false);
+                } 
 
                 currentState = IDLE;
                 stateChanged = true;
