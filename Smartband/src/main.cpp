@@ -405,28 +405,6 @@ void connectToWiFi() {
     }
 }
 
-
-//Simple callbacks for informing the esp32 that someone connected through BLE
-class ServerCallbacks: public NimBLEServerCallbacks {
-    void onConnect(NimBLEServer* pServer) override {
-        deviceConnected = true;
-        bleDisconnection = 0;
-        Serial.println("Client connected.");
-    };
-
-    void onDisconnect(NimBLEServer* pServer) override {
-        bleDisconnection = millis();
-        deviceConnected = false;
-        Serial.println("Client disconnected.");
-    }
-
-    void onMTUChange(uint16_t MTU, ble_gap_conn_desc* desc) override {
-        Serial.print("MTU size updated to: ");
-        Serial.println(MTU);  // This prints the negotiated MTU size
-        currentMTUSize = MTU;
-    }
-};
-
 //Callback to connect to WiFi, works, but not used
 class CharacteristicCallbacks: public NimBLECharacteristicCallbacks {
     void onWrite(NimBLECharacteristic* pCharacteristic) override {
@@ -621,6 +599,45 @@ public:
                 return;
             }
         }
+    }
+
+    void resetFileTransferState() {
+        transferInProgress = false;
+        sendEndMessage = false;
+        bytesSent = 0;
+        if (file) {
+            file.close();
+            Serial.println("File closed after disconnection.");
+        }
+        SD.end();
+    }
+};
+
+//Simple callbacks for informing the esp32 that someone connected through BLE
+class ServerCallbacks: public NimBLEServerCallbacks {
+    void onConnect(NimBLEServer* pServer) override {
+        deviceConnected = true;
+        bleDisconnection = 0;
+        Serial.println("Client connected.");
+    };
+
+    void onDisconnect(NimBLEServer* pServer) override {
+        bleDisconnection = millis();
+        deviceConnected = false;
+        Serial.println("Client disconnected.");
+
+        // Reset file transfer state
+        if (fileTransferCallbacks != nullptr) {
+            // Reset flags to start from the beginning if disconnected
+            auto* ftCallback = static_cast<FileTransferCallbacks*>(fileTransferCallbacks);
+            ftCallback->resetFileTransferState();
+        }
+    }
+
+    void onMTUChange(uint16_t MTU, ble_gap_conn_desc* desc) override {
+        Serial.print("MTU size updated to: ");
+        Serial.println(MTU);  // This prints the negotiated MTU size
+        currentMTUSize = MTU;
     }
 };
 
