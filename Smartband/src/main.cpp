@@ -144,7 +144,7 @@ char sdBuffer[bufferSize];  // Buffer to store data before writing to SD card
 size_t bufferIndex = 0;     // Current position in the buffer
 
 //Firmware (change manually)
-const char* firmwareVersion = "V18";
+const String firmwareVersion = "V19";
 
 //FUNCTIONS
 
@@ -447,6 +447,7 @@ public:
         float battery = readBatteryVoltage();
         int battPerc = calculateBatteryPercentage(battery);
         pCharacteristic->setValue(battPerc);
+        pCharacteristic->notify();
         Serial.println("Battery status read.");
     }
 };
@@ -455,6 +456,7 @@ class RevisionNumberCallbacks : public NimBLECharacteristicCallbacks {
 public:
     void onRead(NimBLECharacteristic* pCharacteristic) override {
         pCharacteristic->setValue(firmwareVersion);
+        pCharacteristic->notify();
         Serial.println("Revision number read.");
     }
 };
@@ -464,6 +466,7 @@ public:
     void onRead(NimBLECharacteristic* pCharacteristic) override {
         int filesToSend = countTrainingFiles();
         pCharacteristic->setValue(filesToSend);
+        pCharacteristic->notify();
         Serial.println("Files to send count read.");
     }
 };
@@ -896,23 +899,26 @@ if (buttonInterruptOccurred || buttonPressed) {
                                             NIMBLE_PROPERTY::WRITE);
                 pTimeSyncCharacteristic->setCallbacks(timeSyncCallbacks);
 
-                NimBLECharacteristic* pBatteryStatusCharacteristic = pService->createCharacteristic(
-                    BATT_LEVEL_UUID,
-                    NIMBLE_PROPERTY::READ
-                );
-                pBatteryStatusCharacteristic->setCallbacks(batteryStatusCallbacks); 
+        batteryStatusCallbacks = new BatteryStatusCallbacks();
+        NimBLECharacteristic* pBatteryStatusCharacteristic = pService->createCharacteristic(
+            BATT_LEVEL_UUID,
+            NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
+        );
+        pBatteryStatusCharacteristic->setCallbacks(batteryStatusCallbacks);
 
-                NimBLECharacteristic* pRevisionNumberCharacteristic = pService->createCharacteristic(
-                    FIRMWARE_VERSION_UUID,
-                    NIMBLE_PROPERTY::READ
-                );
-                pRevisionNumberCharacteristic->setCallbacks(revisionNumberCallbacks);
+        revisionNumberCallbacks = new RevisionNumberCallbacks();
+        NimBLECharacteristic* pRevisionNumberCharacteristic = pService->createCharacteristic(
+            FIRMWARE_VERSION_UUID,
+            NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
+        );
+        pRevisionNumberCharacteristic->setCallbacks(revisionNumberCallbacks);
 
-                NimBLECharacteristic* pFilesToSendCharacteristic = pService->createCharacteristic(
-                    FILES_TO_SEND_UUID,
-                    NIMBLE_PROPERTY::READ
-                );
-                pFilesToSendCharacteristic->setCallbacks(filesToSendCallbacks);
+        filesToSendCallbacks = new FilesToSendCallbacks();
+        NimBLECharacteristic* pFilesToSendCharacteristic = pService->createCharacteristic(
+            FILES_TO_SEND_UUID,
+            NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
+        );
+        pFilesToSendCharacteristic->setCallbacks(filesToSendCallbacks);
 
                 pService->start();
 
@@ -1025,6 +1031,26 @@ if (buttonInterruptOccurred || buttonPressed) {
     }
 
     if(checkIfIsWorn){
+
+        // Check whether battery voltage is high enough 
+        float batteryVoltage = readBatteryVoltage();
+        if (batteryVoltage < 3.15) {
+            Serial.println("Low battery level. Recharge");
+            currentState = IDLE;
+            stateChanged = true;
+            checkIfIsWorn = false;
+        }
+
+        // Check if there's enough space on SD card for new file (Above 5% of all space available).
+        uint64_t totalBytes = SD.totalBytes();
+        uint64_t usedBytes = SD.usedBytes();
+        if ((totalBytes - usedBytes) < (0.05 * totalBytes)) {
+            Serial.println("Not enough storage on SD card. Send training files to app");
+            currentState = IDLE;
+            stateChanged = true;
+            checkIfIsWorn = false;
+        }
+
         if(!isWorn()){
             if(millis() - trainingStartTime >= 15000){ //15 seconds
                 Serial.println("Device is not worn, proceeding to IDLE");
