@@ -32,6 +32,7 @@
 #define ERROR_SD_CORRUPT 2
 #define ERROR_SENSOR_MPU6050 3
 #define ERROR_SENSOR_MAX30102 4
+#define ERROR_NO_STORAGE 5
 
 //For MTU negotiating
 #define BLE_ATT_MTU_MAX 512
@@ -41,7 +42,7 @@ enum DeviceState
     IDLE = 0,
     BLE = 1,
     TRAINING = 2,
-    ERROR = 3
+    ERROR = 3,
 };
 volatile DeviceState currentState = IDLE; //0 - IDLE, 1 - BLE, 2 - Collecting and saving sensor data
 volatile bool stateChanged = false;
@@ -77,7 +78,7 @@ unsigned long lastStateChangeTime = 0;  // time since the last state change, for
 #define R2 2000.0  // R2 = 2 kΩ
 
 // Voltage range for Li-Po battery (full charge and minimum safe voltage)
-#define FULL_BATTERY_VOLTAGE 4.2
+#define FULL_BATTERY_VOLTAGE 4.08
 #define LOW_BATTERY_VOLTAGE 3.15  // Minimum safe voltage
 
 //NimBLE pointers
@@ -146,25 +147,48 @@ size_t bufferIndex = 0;     // Current position in the buffer
 //Firmware (change manually)
 const String firmwareVersion = "V19";
 
+// Resources: battery level and space on SD card
+unsigned long lastResourceCheckTime = 0;
+const unsigned long resourceCheckInterval = 30000; // co 30 sekund
+
 //FUNCTIONS
+
+bool isSpaceAvailable() {
+    if (!SD.begin(CS_PIN)) {
+        Serial.println("SD Card Fail");
+        return false; 
+    }
+
+    uint64_t totalBytes = SD.totalBytes();
+    uint64_t usedBytes = SD.usedBytes();
+    
+    SD.end();
+
+    return (totalBytes - usedBytes) >= (0.05 * totalBytes);
+}
 
 int countTrainingFiles() {
     int fileCount = 0;
-    File root = SD.open("/");
     
-    while (true) {
-        File entry = root.openNextFile();
-        if (!entry) break;  
+    if (!SD.begin(CS_PIN)) {
+        Serial.println("SD Card Fail");
+        return 99; 
+    }
 
-        if (!entry.isDirectory()) {
-            String filename = entry.name();
-            if (filename.startsWith("/training_") && filename.endsWith(".bin")) {
-                fileCount++;
-            }
+    char filename[32];
+
+    File root = SD.open("/");
+    File entry = root.openNextFile();
+    while (entry) {
+        String filename = entry.name();
+        if (filename.startsWith("training_") && filename.endsWith(".bin")) {
+            fileCount++;
         }
         entry.close();
+        entry = root.openNextFile();
     }
-    root.close();
+
+    SD.end();
     return fileCount;
 }
 
@@ -216,15 +240,9 @@ int calculateBatteryPercentage(float batteryVoltage) {
 float readBatteryVoltage() {
     // Read the ADC value
     int adcValue = analogRead(BATTERY_PIN);
-
-        Serial.print("Raw ADC value: ");
-    Serial.println(adcValue);
     
     // Convert ADC value to voltage across the voltage divider
     float voltageDivider = ((float)adcValue / MAX_ADC_VALUE) * REFERENCE_VOLTAGE;
-    
-    Serial.print("Voltage at divider: ");
-    Serial.println(voltageDivider);
 
     // Calculate the actual battery voltage based on the voltage divider
     float batteryVoltage = voltageDivider * (R1 + R2) / R2;
@@ -564,13 +582,23 @@ public:
     }
 
     void deleteFile() {
-        if (SD.exists(currentFileName.c_str())) {
-            SD.remove(currentFileName.c_str());
-            Serial.print("File deleted from SD card. File deleted: ");
-            Serial.println(currentFileName);
-        } else {
-            Serial.println("File not found on SD card.");
+
+        if (!SD.begin(CS_PIN)) {
+            Serial.println("SD Card Fail"); 
         }
+
+        if (!currentFileName.isEmpty() && SD.exists(currentFileName.c_str())) {
+            if (SD.remove(currentFileName.c_str())) {
+                Serial.print("File deleted from SD card. File deleted: ");
+                Serial.println(currentFileName);
+            } else {
+                Serial.println("Failed to delete file from SD card.");
+            }
+        } else {
+            Serial.println("Invalid file name or file does not exist.");
+        }
+
+        SD.end();
     }
 
     void sendNextFile() {
@@ -629,6 +657,7 @@ class TimeSyncCallbacks : public NimBLECharacteristicCallbacks {
         }
     }
 };
+
 
 void setup() {
     Serial.begin(115200);
@@ -765,7 +794,9 @@ if (buttonInterruptOccurred || buttonPressed) {
 }
 
     if (stateChanged) {
+        float batteryVoltage = readBatteryVoltage();
         stateChanged = false;
+
         switch (currentState) {
             case IDLE: // Idle state, no data are collected from sensors
                 digitalWrite(LED_PIN_IDLE, HIGH);
@@ -832,11 +863,19 @@ if (buttonInterruptOccurred || buttonPressed) {
                 Serial.println("Idle mode");
 
                 esp_sleep_enable_ext0_wakeup(GPIO_NUM_13, 0);  // 0 = LOW level to trigger wakeup
-
                 esp_light_sleep_start();  // Device will sleep here until GPIO13 wakes it
                 break;
 
             case BLE: // BLE state, BLE server is on, should broadcast
+
+                // Check whether battery voltage is high enough 
+                if (batteryVoltage < 3.15) {
+                    Serial.println("Low battery level. Recharge");
+                    currentState = IDLE;
+                    stateChanged = true;
+                    break;
+                }
+
                 digitalWrite(LED_PIN_IDLE, LOW);
                 digitalWrite(LED_PIN_BLE, HIGH);
                 digitalWrite(LED_PIN_TRAINING, LOW);
@@ -939,6 +978,22 @@ if (buttonInterruptOccurred || buttonPressed) {
 
             case TRAINING: // Exercise state, collect data from sensors
 
+                // Check whether battery voltage is high enough 
+                if (batteryVoltage < 3.15) {
+                    Serial.println("Low battery level. Recharge");
+                    currentState = IDLE;
+                    stateChanged = true;
+                    break;
+                }
+
+                // Check if there's enough space on SD card for new file (Above 5% of all space available).
+                if ((!isSpaceAvailable())) {
+                    Serial.println("Not enough storage on SD card. Send training files to app");
+                    currentState = ERROR;
+                    stateChanged = true;
+                    break;
+                }
+
                 sensorMAX.setup(); // Configure sensor with default settings
                 sensorMAX.setPulseAmplitudeRed(60);
                 //sensorMAX.setPulseAmplitudeIR(0x0A); //dont need to set it, the default setting have IR powered already
@@ -1016,8 +1071,14 @@ if (buttonInterruptOccurred || buttonPressed) {
                     signalError(ERROR_SD_NOT_FOUND);
                 }
 
+                while ((!isSpaceAvailable())) {
+                    Serial.println("Not enough storage on SD card. Send training files to app");
+                    signalError(ERROR_NO_STORAGE);
+                }
+
                 currentState = IDLE;
                 stateChanged = true;
+                checkIfIsWorn = false;
 
                 break;
 
@@ -1031,25 +1092,6 @@ if (buttonInterruptOccurred || buttonPressed) {
     }
 
     if(checkIfIsWorn){
-
-        // Check whether battery voltage is high enough 
-        float batteryVoltage = readBatteryVoltage();
-        if (batteryVoltage < 3.15) {
-            Serial.println("Low battery level. Recharge");
-            currentState = IDLE;
-            stateChanged = true;
-            checkIfIsWorn = false;
-        }
-
-        // Check if there's enough space on SD card for new file (Above 5% of all space available).
-        uint64_t totalBytes = SD.totalBytes();
-        uint64_t usedBytes = SD.usedBytes();
-        if ((totalBytes - usedBytes) < (0.05 * totalBytes)) {
-            Serial.println("Not enough storage on SD card. Send training files to app");
-            currentState = IDLE;
-            stateChanged = true;
-            checkIfIsWorn = false;
-        }
 
         if(!isWorn()){
             if(millis() - trainingStartTime >= 15000){ //15 seconds
@@ -1067,6 +1109,29 @@ if (buttonInterruptOccurred || buttonPressed) {
 
     if(currentState == TRAINING && !checkIfIsWorn){
         sampleStartTime = millis();
+
+        if (sampleStartTime - lastResourceCheckTime >= resourceCheckInterval) {
+            lastResourceCheckTime = sampleStartTime;
+
+            // Sprawdzenie poziomu baterii
+            if (readBatteryVoltage() < 3.15) {
+                Serial.println("Low battery level. Recharge.");
+                endTraining();
+                currentState = IDLE;
+                stateChanged = true;
+                return;
+            }
+
+            // Sprawdzenie dostępnego miejsca na karcie SD
+            if (!isSpaceAvailable()) {
+                Serial.println("No more space on SD card Send files through BLE.");
+                endTraining();
+                currentState = IDLE;
+                stateChanged = true;
+                return;
+            }
+        }
+
         collectAndBufferData();
 
         do{
