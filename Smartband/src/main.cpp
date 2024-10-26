@@ -233,6 +233,7 @@ float readBatteryVoltage() {
 }
 
 void startTraining() {
+
     unsigned long trainingStartTime = getCurrentTime() + 3600; //3600, because Poland is in UTC+1 timezone
 
     do {
@@ -444,7 +445,7 @@ class BatteryStatusCallbacks : public NimBLECharacteristicCallbacks {
 public:
     void onRead(NimBLECharacteristic* pCharacteristic) override {
         float battery = readBatteryVoltage();
-        int battPerc = calculateBatteryPercentage(battPerc);
+        int battPerc = calculateBatteryPercentage(battery);
         pCharacteristic->setValue(battPerc);
         Serial.println("Battery status read.");
     }
@@ -899,13 +900,13 @@ if (buttonInterruptOccurred || buttonPressed) {
                     BATT_LEVEL_UUID,
                     NIMBLE_PROPERTY::READ
                 );
-                pFilesToSendCharacteristic->setCallbacks(batteryStatusCallbacks); 
+                pBatteryStatusCharacteristic->setCallbacks(batteryStatusCallbacks); 
 
                 NimBLECharacteristic* pRevisionNumberCharacteristic = pService->createCharacteristic(
                     FIRMWARE_VERSION_UUID,
                     NIMBLE_PROPERTY::READ
                 );
-                pFilesToSendCharacteristic->setCallbacks(revisionNumberCallbacks);
+                pRevisionNumberCharacteristic->setCallbacks(revisionNumberCallbacks);
 
                 NimBLECharacteristic* pFilesToSendCharacteristic = pService->createCharacteristic(
                     FILES_TO_SEND_UUID,
