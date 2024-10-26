@@ -305,19 +305,19 @@ void setup() {
 
         NimBLECharacteristic* pBatteryStatusCharacteristic = pService->createCharacteristic(
             BATT_LEVEL_UUID,
-            NIMBLE_PROPERTY::READ
+            NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
         );
         pBatteryStatusCharacteristic->setCallbacks(batteryStatusCallbacks); 
 
         NimBLECharacteristic* pRevisionNumberCharacteristic = pService->createCharacteristic(
             FIRMWARE_VERSION_UUID,
-            NIMBLE_PROPERTY::READ
+            NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
         );
         pRevisionNumberCharacteristic->setCallbacks(revisionNumberCallbacks);
 
         NimBLECharacteristic* pFilesToSendCharacteristic = pService->createCharacteristic(
             FILES_TO_SEND_UUID,
-            NIMBLE_PROPERTY::READ
+            NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
         );
         pFilesToSendCharacteristic->setCallbacks(filesToSendCallbacks);
 
