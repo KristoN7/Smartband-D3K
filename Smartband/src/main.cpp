@@ -24,7 +24,7 @@
 
 //mock data for characteristics
 int batteryLevel = 76;
-const char* firmwareVersion = "2.5";
+const String firmwareVersion = "2.5";
 int filesToSend = 1;
 
 uint8_t sampleData[] = {
