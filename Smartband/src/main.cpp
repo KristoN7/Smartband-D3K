@@ -116,6 +116,7 @@ class BatteryStatusCallbacks : public NimBLECharacteristicCallbacks {
 public:
     void onRead(NimBLECharacteristic* pCharacteristic) override {
         pCharacteristic->setValue(batteryLevel);
+        pCharacteristic->notify();
         Serial.println("Battery status read.");
     }
 };
@@ -124,6 +125,7 @@ class RevisionNumberCallbacks : public NimBLECharacteristicCallbacks {
 public:
     void onRead(NimBLECharacteristic* pCharacteristic) override {
         pCharacteristic->setValue(firmwareVersion);
+        pCharacteristic->notify();
         Serial.println("Revision number read.");
     }
 };
@@ -132,6 +134,7 @@ class FilesToSendCallbacks : public NimBLECharacteristicCallbacks {
 public:
     void onRead(NimBLECharacteristic* pCharacteristic) override {
         pCharacteristic->setValue(filesToSend);
+        pCharacteristic->notify();
         Serial.println("Files to send count read.");
     }
 };
