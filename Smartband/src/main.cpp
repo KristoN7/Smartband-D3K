@@ -166,14 +166,20 @@ private:
     size_t bytesSent = 0;
     bool transferInProgress = false;
     bool sendEndMessage = false;
+    bool messageSizeSent = false;
 
 public:
     void onRead(NimBLECharacteristic* pCharacteristic) override {
         chunkSize = currentMTUSize - 3;
+
+
         if (!transferInProgress && !sendEndMessage) {
             startMessageTransfer();
         }
 
+        if(!messageSizeSent){
+            sendMessageSize(pCharacteristic);
+        }
         if (transferInProgress) {
             sendNextChunk(pCharacteristic);
         } else if (sendEndMessage) {
@@ -181,9 +187,27 @@ public:
         }
     }
 
+    void sendMessageSize(NimBLECharacteristic* pCharacteristic) {
+        uint32_t messageSize = sampleSize;
+        uint8_t sizeBytes[4];
+
+        // Little Endian Conversion
+        sizeBytes[0] = (messageSize >> 0) & 0xFF;
+        sizeBytes[1] = (messageSize >> 8) & 0xFF;
+        sizeBytes[2] = (messageSize >> 16) & 0xFF;
+        sizeBytes[3] = (messageSize >> 24) & 0xFF;
+
+        pCharacteristic->setValue(sizeBytes, sizeof(sizeBytes));
+        pCharacteristic->notify();
+
+        messageSizeSent = true;
+        Serial.printf("Sent message size: %d bytes\n", messageSize);
+    }
+
     void startMessageTransfer() {
         bytesSent = 0;
         transferInProgress = true;
+        messageSizeSent = false;
 
         Serial.println("Message transfer started");
     }
@@ -217,6 +241,7 @@ public:
         // Reset flags to start the process again
         sendEndMessage = false;
         transferInProgress = false;
+        messageSizeSent = false;
     }
 };
 
