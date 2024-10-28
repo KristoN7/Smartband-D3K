@@ -516,6 +516,7 @@ private:
     bool transferInProgress = false;
     String currentFileName;
     bool sendEndMessage = false;
+    bool messageSizeSent = false;
 
 public:
     void onRead(NimBLECharacteristic* pCharacteristic) override {
@@ -530,12 +531,35 @@ public:
             sendNextFile();
         }
 
-        if (transferInProgress) {
+        if(!messageSizeSent){
+            sendMessageSize(pCharacteristic);
+        }
+        else if (transferInProgress) {
             sendNextChunk(pCharacteristic);
-        } else if (sendEndMessage){
+        } 
+        else if (sendEndMessage){
             sendEnd(pCharacteristic);
         }
     }
+
+
+    void sendMessageSize(NimBLECharacteristic* pCharacteristic) {
+        uint32_t messageSize = fileSize;
+        uint8_t sizeBytes[4];
+
+        // Little Endian Conversion
+        sizeBytes[0] = (messageSize >> 0) & 0xFF;
+        sizeBytes[1] = (messageSize >> 8) & 0xFF;
+        sizeBytes[2] = (messageSize >> 16) & 0xFF;
+        sizeBytes[3] = (messageSize >> 24) & 0xFF;
+
+        pCharacteristic->setValue(sizeBytes, sizeof(sizeBytes));
+        pCharacteristic->notify();
+
+        messageSizeSent = true;
+        Serial.printf("Sent message size: %d bytes\n", messageSize);
+    }
+
 
     void startFileTransfer(const char* fileName) {
         delay(10);
@@ -643,6 +667,7 @@ public:
     void resetFileTransferState() {
         transferInProgress = false;
         sendEndMessage = false;
+        messageSizeSent = false;
         bytesSent = 0;
         if (file) {
             file.close();
