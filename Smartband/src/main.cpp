@@ -180,9 +180,10 @@ public:
         if(!messageSizeSent){
             sendMessageSize(pCharacteristic);
         }
-        if (transferInProgress) {
+        else if (transferInProgress) {
             sendNextChunk(pCharacteristic);
-        } else if (sendEndMessage) {
+        } 
+        else if (sendEndMessage) {
             sendEnd(pCharacteristic);
         }
     }
