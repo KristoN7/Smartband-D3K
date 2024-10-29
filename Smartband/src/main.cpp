@@ -235,7 +235,7 @@ public:
     }
 
     void sendMessageSize(NimBLECharacteristic* pCharacteristic) {
-        uint32_t messageSize = sampleSize;
+        uint32_t messageSize = compressedSize;
         uint8_t sizeBytes[4];
 
         // Little Endian Conversion
@@ -257,13 +257,15 @@ public:
             free(compressedData);
         }
 
-        compressedData = (uint8_t*)malloc(2 * sampleSize); 
+        size_t maxCompressedSize = LZ4_compressBound(sampleSize);
+
+        compressedData = (uint8_t*)malloc(maxCompressedSize);
         if (compressedData == nullptr) {
             Serial.println("Memory allocation failed for compressed data!");
             return;
         }
 
-        compressedSize = LZ4_compress_default((const char *)sampleData, (char *)compressedData, sampleSize, 2*sampleSize);
+        compressedSize = LZ4_compress_default((const char *)sampleData, (char *)compressedData, sampleSize, maxCompressedSize);
 
         if(compressedSize > 0){
             Serial.printf("Data compressed to %d bytes\n", compressedSize);
@@ -275,7 +277,9 @@ public:
             memcpy(compressedData, sampleData, compressedSize);
             //just in case the compression didn't happen, although the app can't process this data properly
         }
-        
+
+
+
         bytesSent = 0;
         transferInProgress = true;
         messageSizeSent = false;
