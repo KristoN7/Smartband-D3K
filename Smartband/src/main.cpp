@@ -11,6 +11,8 @@
 // UUIDs for BLE Service and Characteristics
 #define SERVICE_UUID        "12345678-1234-1234-1234-123456789113"
 #define MESSAGE_TRANSFER_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130013"
+#define SSID_CHAR_UUID      "e2e3f5a4-8c4f-11eb-8dcd-0242ac130003"
+#define PASSWORD_CHAR_UUID  "e2e3f5a4-8c4f-11eb-8dcd-0242ac130004"
 #define CONFIRMATION_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130006"  // confirmation from app regarding file transmission success
 #define TIME_SYNC_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130007"
 #define BATT_LEVEL_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130021"
@@ -21,6 +23,10 @@
 
 //BLUE LED
 #define LED_PIN_BLE 2
+
+//For wifi connection
+String ssid = "";
+String password = "";
 
 //mock data for characteristics
 int batteryLevel = 76;
@@ -96,7 +102,11 @@ NimBLECharacteristic* pTimeSyncCharacteristic = nullptr;
 NimBLECharacteristic* pBatteryStatusCharacteristic = nullptr;
 NimBLECharacteristic* pRevisionNumberCharacteristic = nullptr;
 NimBLECharacteristic* pFilesToSendCharacteristic = nullptr;
+NimBLECharacteristic* pSsidCharacteristic = nullptr;
+NimBLECharacteristic* pPasswordCharacteristic = nullptr;
 
+NimBLECharacteristicCallbacks* ssidCallbacks = nullptr;
+NimBLECharacteristicCallbacks* passwordCallbacks = nullptr;
 NimBLECharacteristicCallbacks* fileTransferCallbacks = nullptr;
 NimBLECharacteristicCallbacks* confirmationCallbacks = nullptr;
 NimBLECharacteristicCallbacks* timeSyncCallbacks = nullptr;
@@ -111,6 +121,37 @@ uint16_t currentMTUSize = 24;
 unsigned long syncedTime = 0; // time synchronized using app's time (UNIX timestamp)
 unsigned long lastSyncMillis = 0; // time in milliseconds when synchronization occurred
 unsigned long time1; //for displaying time in loop()
+
+class CharacteristicCallbacks: public NimBLECharacteristicCallbacks {
+    void onWrite(NimBLECharacteristic* pCharacteristic) override {
+        Serial.println("Attempting to write new credentials.");
+        std::string uuid = pCharacteristic->getUUID().toString();
+        Serial.print("UUID: ");
+        Serial.println(uuid.c_str());
+
+        String value = pCharacteristic->getValue().c_str();
+        Serial.print("Value Length: ");
+        Serial.println(value.length());
+        Serial.print("Value: ");
+        for (char c : value) {
+            Serial.print(c);
+            Serial.print(" ");
+        }
+        Serial.println();
+
+        if (uuid == SSID_CHAR_UUID) {
+            ssid = value;
+            Serial.print("Received SSID: ");
+            Serial.println(ssid.c_str());
+        } else if (uuid == PASSWORD_CHAR_UUID) {
+            password = value;
+            Serial.print("Received Password: ");
+            Serial.println(password.c_str());
+            // Attempt to connect to WiFi
+            //connectToWiFi();
+        }
+    }
+};
 
 class BatteryStatusCallbacks : public NimBLECharacteristicCallbacks {
 public:
@@ -308,6 +349,19 @@ void setup() {
 
         pService = pServer->createService(SERVICE_UUID);
 
+        ssidCallbacks = new CharacteristicCallbacks();
+        pSsidCharacteristic = pService->createCharacteristic(
+            SSID_CHAR_UUID,
+            NIMBLE_PROPERTY::WRITE
+            );
+        pSsidCharacteristic->setCallbacks(ssidCallbacks);
+
+        passwordCallbacks = new CharacteristicCallbacks();
+        pPasswordCharacteristic = pService->createCharacteristic(
+            PASSWORD_CHAR_UUID,
+            NIMBLE_PROPERTY::WRITE
+            );
+        pPasswordCharacteristic->setCallbacks(passwordCallbacks);
     
         pMessageTransferCharacteristic = pService->createCharacteristic(
             MESSAGE_TRANSFER_UUID,
