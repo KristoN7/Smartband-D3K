@@ -20,6 +20,9 @@
 //Time, note: send bytes in Little Endian
 #include <time.h>
 
+//Data compression (LZ4)
+#include "lz4.h"
+
 //Working states 
 #define LED_PIN_IDLE 15
 #define LED_PIN_BLE 2
