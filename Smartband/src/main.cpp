@@ -8,6 +8,8 @@
 //Time, note: send bytes in Little Endian
 #include <time.h>
 
+#include "lz4.h"
+
 // UUIDs for BLE Service and Characteristics
 #define SERVICE_UUID        "12345678-1234-1234-1234-123456789113"
 #define MESSAGE_TRANSFER_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130013"
@@ -208,6 +210,8 @@ private:
     bool transferInProgress = false;
     bool sendEndMessage = false;
     bool messageSizeSent = false;
+    uint8_t compressedData[sizeof(sampleData)]; //buffer for compressedData
+    size_t compressedSize = 0;
 
 public:
     void onRead(NimBLECharacteristic* pCharacteristic) override {
@@ -247,6 +251,21 @@ public:
     }
 
     void startMessageTransfer() {
+
+        compressedSize = LZ4_compress_default((const char *)sampleData, (char *)compressedData,
+                                             sizeof(sampleData), sizeof(compressedData));
+
+        if(compressedSize > 0){
+            Serial.printf("Data compressed to %d bytes\n", compressedSize);
+            Serial.printf("Size before compression: %d bytes\n", sampleSize);
+        }
+        else{
+            Serial.println("Compression failed!");
+            compressedSize = sizeof(sampleData);
+            memcpy(compressedData, sampleData, compressedSize);
+            //just in case the compression didn't happen, although the app can't process this data properly
+        }
+        
         bytesSent = 0;
         transferInProgress = true;
         messageSizeSent = false;
@@ -260,13 +279,13 @@ public:
         size_t bytesToSend = min(chunkSize, bytesRemaining);
 
         // Send the chunk
-        pCharacteristic->setValue(&sampleData[bytesSent], bytesToSend);
+        pCharacteristic->setValue(&compressedData[bytesSent], bytesToSend);
         pCharacteristic->notify();
 
         bytesSent += bytesToSend;
-        Serial.printf("Sent %d/%d bytes\n", bytesSent, sampleSize);
+        Serial.printf("Sent %d/%d bytes\n", bytesSent, compressedSize);
 
-        if (bytesSent >= sampleSize) {
+        if (bytesSent >= compressedSize) {
             transferInProgress = false;
             sendEndMessage = true; // Set flag to send "END" message next
             Serial.println("Message transfer completed");
