@@ -210,7 +210,8 @@ private:
     bool transferInProgress = false;
     bool sendEndMessage = false;
     bool messageSizeSent = false;
-    uint8_t compressedData[sizeof(sampleData)]; //buffer for compressedData
+
+    uint8_t *compressedData = nullptr;
     size_t compressedSize = 0;
 
 public:
@@ -252,8 +253,17 @@ public:
 
     void startMessageTransfer() {
 
-        compressedSize = LZ4_compress_default((const char *)sampleData, (char *)compressedData,
-                                             sizeof(sampleData), sizeof(compressedData));
+        if (compressedData != nullptr) {
+            free(compressedData);
+        }
+
+        compressedData = (uint8_t*)malloc(2 * sampleSize); 
+        if (compressedData == nullptr) {
+            Serial.println("Memory allocation failed for compressed data!");
+            return;
+        }
+
+        compressedSize = LZ4_compress_default((const char *)sampleData, (char *)compressedData, sampleSize, 2*sampleSize);
 
         if(compressedSize > 0){
             Serial.printf("Data compressed to %d bytes\n", compressedSize);
@@ -261,7 +271,7 @@ public:
         }
         else{
             Serial.println("Compression failed!");
-            compressedSize = sizeof(sampleData);
+            compressedSize = sampleSize;
             memcpy(compressedData, sampleData, compressedSize);
             //just in case the compression didn't happen, although the app can't process this data properly
         }
@@ -275,7 +285,7 @@ public:
 
     void sendNextChunk(NimBLECharacteristic* pCharacteristic) {
         // Calculate the number of bytes left to send
-        size_t bytesRemaining = sampleSize - bytesSent;
+        size_t bytesRemaining = compressedSize - bytesSent;
         size_t bytesToSend = min(chunkSize, bytesRemaining);
 
         // Send the chunk
@@ -303,6 +313,12 @@ public:
         sendEndMessage = false;
         transferInProgress = false;
         messageSizeSent = false;
+    }
+
+    ~MessageTransferCallbacks() {
+        if (compressedData != nullptr) {
+            free(compressedData);
+        }
     }
 };
 
