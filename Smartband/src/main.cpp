@@ -15,7 +15,7 @@
 #include <NimBLEServer.h>
 
 //JSON
-#include <ArduinoJson.h>
+//#include <ArduinoJson.h>
 
 //Time, note: send bytes in Little Endian
 #include <time.h>
