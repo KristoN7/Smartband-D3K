@@ -37,6 +37,9 @@
 //For MTU negotiating
 #define BLE_ATT_MTU_MAX 512
 
+//For security 
+#define AUTH_KEY "M2pX5hQ7Lk8Z1vW3TrR"
+
 enum DeviceState
 {
     IDLE = 0,
@@ -810,6 +813,82 @@ void setup() {
     dataFile.println("IR, Red, Ax, Ay, Az, Gx, Gy, Gz");
     dataFile.close();
 
+    delay(500); //for power stabilization
+
+    //BLE initizalization
+                    
+    NimBLEDevice::init("ESP32 D3K");
+    NimBLEDevice::setMTU(512);
+
+    pServer = NimBLEDevice::createServer();
+    pServer->setCallbacks(new ServerCallbacks());
+                
+    pService = pServer->createService(SERVICE_UUID);        
+
+        ssidCallbacks = new CharacteristicCallbacks();
+        pSsidCharacteristic = pService->createCharacteristic(
+            SSID_CHAR_UUID,
+            NIMBLE_PROPERTY::WRITE
+        );
+        pSsidCharacteristic->setCallbacks(ssidCallbacks);
+
+        passwordCallbacks = new CharacteristicCallbacks();
+        pPasswordCharacteristic = pService->createCharacteristic(
+            PASSWORD_CHAR_UUID,
+            NIMBLE_PROPERTY::WRITE
+        );
+        pPasswordCharacteristic->setCallbacks(passwordCallbacks);
+
+        fileTransferCallbacks = new FileTransferCallbacks();
+        pFileTransferCharacteristic = pService->createCharacteristic(
+            FILE_TRANSFER_UUID,
+            NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
+        );
+        pFileTransferCharacteristic->setCallbacks(fileTransferCallbacks);
+
+        confirmationCallbacks = new ConfirmationCallbacks();
+        pConfirmationCharacteristic = pService->createCharacteristic(
+            CONFIRMATION_UUID,
+            NIMBLE_PROPERTY::WRITE
+        );
+        pConfirmationCharacteristic->setCallbacks(confirmationCallbacks);
+
+        timeSyncCallbacks = new TimeSyncCallbacks();
+        pTimeSyncCharacteristic = pService->createCharacteristic(
+            TIME_SYNC_UUID,
+            NIMBLE_PROPERTY::WRITE
+        );
+        pTimeSyncCharacteristic->setCallbacks(timeSyncCallbacks);
+
+        batteryStatusCallbacks = new BatteryStatusCallbacks();
+        pBatteryStatusCharacteristic = pService->createCharacteristic(
+            BATT_LEVEL_UUID,
+            NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
+        );
+        pBatteryStatusCharacteristic->setCallbacks(batteryStatusCallbacks);
+
+        revisionNumberCallbacks = new RevisionNumberCallbacks();
+        pRevisionNumberCharacteristic = pService->createCharacteristic(
+            FIRMWARE_VERSION_UUID,
+            NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
+        );
+        pRevisionNumberCharacteristic->setCallbacks(revisionNumberCallbacks);
+
+        filesToSendCallbacks = new FilesToSendCallbacks();
+        pFilesToSendCharacteristic = pService->createCharacteristic(
+            FILES_TO_SEND_UUID,
+            NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
+        );
+        pFilesToSendCharacteristic->setCallbacks(filesToSendCallbacks);
+
+    pService->start();
+
+    pAdvertising = NimBLEDevice::getAdvertising();
+    pAdvertising->addServiceUUID(SERVICE_UUID);
+    pAdvertising->start();
+
+    Serial.println("BLE initialized");
+    
     //IDLE MODE IN THE BEGINNING
 
     digitalWrite(LED_PIN_IDLE, HIGH);
@@ -888,6 +967,11 @@ if (buttonInterruptOccurred || buttonPressed) {
                 checkIfIsWorn = false;
                 //convertCsvToJson(filename, filenameJSON);  // JSON conversion, moved to mobile apps      
 
+                if (pAdvertising != nullptr && pAdvertising->isAdvertising()) {
+                    pAdvertising->stop();
+                }
+
+                /*
                 if (pServer != nullptr || pAdvertising != nullptr || pService != nullptr) {
                     NimBLEDevice::deinit(true);
                     pServer = nullptr;
@@ -934,6 +1018,7 @@ if (buttonInterruptOccurred || buttonPressed) {
                     delete filesToSendCallbacks;
                     filesToSendCallbacks = nullptr;
                 } 
+                */
 
                 SD.end();
                 
@@ -967,86 +1052,16 @@ if (buttonInterruptOccurred || buttonPressed) {
                     stateChanged = true;
                 }
 
+                delay(500); //for power stabilization
+
+                if (!pAdvertising->isAdvertising()) {
+                    pAdvertising->start();
+                    Serial.println("BLE advertising started.");
+                }
+
                 endTraining();  // closing the CSV file
 
                 checkIfIsWorn = false;
-
-                // Todo: connect mobile phone to ESP32 during this state
-
-                if (pAdvertising->isAdvertising() == false or pAdvertising == nullptr or pServer == nullptr or pService == nullptr) {
-                    
-                NimBLEDevice::init("ESP32 D3K");
-                NimBLEDevice::setMTU(512);
-
-                pServer = NimBLEDevice::createServer();
-                pServer->setCallbacks(new ServerCallbacks());
-                
-
-                pService = pServer->createService(SERVICE_UUID);
-                
-
-                ssidCallbacks = new CharacteristicCallbacks();
-                pSsidCharacteristic = pService->createCharacteristic(
-                                        SSID_CHAR_UUID,
-                                        NIMBLE_PROPERTY::WRITE
-                                    );
-                pSsidCharacteristic->setCallbacks(ssidCallbacks);
-
-                passwordCallbacks = new CharacteristicCallbacks();
-                pPasswordCharacteristic = pService->createCharacteristic(
-                                            PASSWORD_CHAR_UUID,
-                                            NIMBLE_PROPERTY::WRITE
-                                        );
-                pPasswordCharacteristic->setCallbacks(passwordCallbacks);
-
-                fileTransferCallbacks = new FileTransferCallbacks();
-                pFileTransferCharacteristic = pService->createCharacteristic(
-                                                FILE_TRANSFER_UUID,
-                                                NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
-                                            );
-                pFileTransferCharacteristic->setCallbacks(fileTransferCallbacks);
-
-                confirmationCallbacks = new ConfirmationCallbacks();
-                pConfirmationCharacteristic = pService->createCharacteristic(
-                                                CONFIRMATION_UUID,
-                                                NIMBLE_PROPERTY::WRITE
-                                            );
-                pConfirmationCharacteristic->setCallbacks(confirmationCallbacks);
-
-                timeSyncCallbacks = new TimeSyncCallbacks();
-                pTimeSyncCharacteristic = pService->createCharacteristic(
-                                            TIME_SYNC_UUID,
-                                            NIMBLE_PROPERTY::WRITE);
-                pTimeSyncCharacteristic->setCallbacks(timeSyncCallbacks);
-
-        batteryStatusCallbacks = new BatteryStatusCallbacks();
-        NimBLECharacteristic* pBatteryStatusCharacteristic = pService->createCharacteristic(
-            BATT_LEVEL_UUID,
-            NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
-        );
-        pBatteryStatusCharacteristic->setCallbacks(batteryStatusCallbacks);
-
-        revisionNumberCallbacks = new RevisionNumberCallbacks();
-        NimBLECharacteristic* pRevisionNumberCharacteristic = pService->createCharacteristic(
-            FIRMWARE_VERSION_UUID,
-            NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
-        );
-        pRevisionNumberCharacteristic->setCallbacks(revisionNumberCallbacks);
-
-        filesToSendCallbacks = new FilesToSendCallbacks();
-        NimBLECharacteristic* pFilesToSendCharacteristic = pService->createCharacteristic(
-            FILES_TO_SEND_UUID,
-            NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
-        );
-        pFilesToSendCharacteristic->setCallbacks(filesToSendCallbacks);
-
-                pService->start();
-
-                pAdvertising = NimBLEDevice::getAdvertising();
-                pAdvertising->addServiceUUID(SERVICE_UUID);
-                pAdvertising->start();
-
-                }
 
                 bleDisconnection = millis();
 
@@ -1065,6 +1080,10 @@ if (buttonInterruptOccurred || buttonPressed) {
                     currentState = IDLE;
                     stateChanged = true;
                     break;
+                }
+
+                if (pAdvertising != nullptr && pAdvertising->isAdvertising()) {
+                    pAdvertising->stop();
                 }
 
                 // Check if there's enough space on SD card for new file (Above 5% of all space available).
@@ -1086,6 +1105,7 @@ if (buttonInterruptOccurred || buttonPressed) {
                 digitalWrite(LED_PIN_BLE, LOW);
                 digitalWrite(LED_PIN_TRAINING, HIGH);
 
+                /*
                 if (pServer != nullptr || pAdvertising != nullptr || pService != nullptr) {
                     NimBLEDevice::deinit(true);
                     pServer = nullptr;
@@ -1133,7 +1153,7 @@ if (buttonInterruptOccurred || buttonPressed) {
                     delete filesToSendCallbacks;
                     filesToSendCallbacks = nullptr;
                 } 
-
+                */
 
                 if (!SD.begin(CS_PIN)) {
                     Serial.println("Card Mount Failed");
@@ -1144,6 +1164,7 @@ if (buttonInterruptOccurred || buttonPressed) {
                     checkIfIsWorn = true;
                     trainingStartTime = millis();
                 }
+                
                 break;
 
             case ERROR:
