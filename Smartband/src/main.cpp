@@ -18,6 +18,7 @@
 #define BATT_LEVEL_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130021"
 #define FIRMWARE_VERSION_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130022"
 #define FILES_TO_SEND_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130023"
+#define PRIVATE_KEY_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130025"
 
 #define BLE_ATT_MTU_MAX 512
 
@@ -32,6 +33,9 @@ String password = "";
 int batteryLevel = 76;
 const String firmwareVersion = "2.5";
 int filesToSend = 1;
+
+const String privateKey = "nuvijridkvinorj"; 
+bool provisioningComplete = false;
 
 uint8_t sampleData[] = {
     0x10, 0x0E, 0x00, 0x00,   //Unix timestamp
@@ -104,6 +108,7 @@ NimBLECharacteristic* pRevisionNumberCharacteristic = nullptr;
 NimBLECharacteristic* pFilesToSendCharacteristic = nullptr;
 NimBLECharacteristic* pSsidCharacteristic = nullptr;
 NimBLECharacteristic* pPasswordCharacteristic = nullptr;
+NimBLECharacteristic *pPrivateKeyCharacteristic = nullptr;
 
 NimBLECharacteristicCallbacks* ssidCallbacks = nullptr;
 NimBLECharacteristicCallbacks* passwordCallbacks = nullptr;
@@ -113,6 +118,8 @@ NimBLECharacteristicCallbacks* timeSyncCallbacks = nullptr;
 NimBLECharacteristicCallbacks* batteryStatusCallbacks = nullptr;
 NimBLECharacteristicCallbacks* revisionNumberCallbacks = nullptr;
 NimBLECharacteristicCallbacks* filesToSendCallbacks = nullptr;
+NimBLECharacteristicCallbacks *privateKeyCallbacks = nullptr;
+
 bool deviceConnected = false;
 
 uint16_t currentMTUSize = 24;
@@ -122,8 +129,27 @@ unsigned long syncedTime = 0; // time synchronized using app's time (UNIX timest
 unsigned long lastSyncMillis = 0; // time in milliseconds when synchronization occurred
 unsigned long time1; //for displaying time in loop()
 
+class PrivateKeyCallbacks : public NimBLECharacteristicCallbacks {
+public:
+    void onWrite(NimBLECharacteristic* pCharacteristic) override {
+        String receivedKey = pCharacteristic->getValue().c_str();
+        if (receivedKey == privateKey) {
+            provisioningComplete = true;
+            Serial.println("Provisioning successful, key verified.");
+        } else {
+            provisioningComplete = false;
+            Serial.println("Provisioning failed, key mismatch.");
+        }
+    }
+};
+
 class CharacteristicCallbacks: public NimBLECharacteristicCallbacks {
     void onWrite(NimBLECharacteristic* pCharacteristic) override {
+        if (!provisioningComplete) {
+            Serial.println("Provisioning not completed. Transmission blocked.");
+            return;  // Blokuje wszelkie działania
+        }
+
         Serial.println("Attempting to write new credentials.");
         std::string uuid = pCharacteristic->getUUID().toString();
         Serial.print("UUID: ");
@@ -156,6 +182,10 @@ class CharacteristicCallbacks: public NimBLECharacteristicCallbacks {
 class BatteryStatusCallbacks : public NimBLECharacteristicCallbacks {
 public:
     void onRead(NimBLECharacteristic* pCharacteristic) override {
+        if (!provisioningComplete) {
+            Serial.println("Provisioning not completed. Transmission blocked.");
+            return;  // Blokuje wszelkie działania
+        }
         pCharacteristic->setValue(batteryLevel);
         pCharacteristic->notify();
         Serial.println("Battery status read.");
@@ -165,6 +195,10 @@ public:
 class RevisionNumberCallbacks : public NimBLECharacteristicCallbacks {
 public:
     void onRead(NimBLECharacteristic* pCharacteristic) override {
+        if (!provisioningComplete) {
+            Serial.println("Provisioning not completed. Transmission blocked.");
+            return;  // Blokuje wszelkie działania
+        }        
         pCharacteristic->setValue(firmwareVersion);
         pCharacteristic->notify();
         Serial.println("Revision number read.");
@@ -174,6 +208,10 @@ public:
 class FilesToSendCallbacks : public NimBLECharacteristicCallbacks {
 public:
     void onRead(NimBLECharacteristic* pCharacteristic) override {
+        if (!provisioningComplete) {
+            Serial.println("Provisioning not completed. Transmission blocked.");
+            return;  // Blokuje wszelkie działania
+        }        
         pCharacteristic->setValue(filesToSend);
         pCharacteristic->notify();
         Serial.println("Files to send count read.");
@@ -183,7 +221,8 @@ public:
 class ServerCallbacks: public NimBLEServerCallbacks {
     void onConnect(NimBLEServer* pServer) override {
         deviceConnected = true;
-        Serial.println("Client connected.");
+        provisioningComplete = false;
+        Serial.println("Client connected. Awaiting private key for provisioning.");
     }
 
     void onMTUChange(uint16_t MTU, ble_gap_conn_desc* desc) override {
@@ -195,6 +234,7 @@ class ServerCallbacks: public NimBLEServerCallbacks {
     void onDisconnect(NimBLEServer* pServer) override {
         deviceConnected = false;
         Serial.println("Client disconnected.");
+        provisioningComplete = false;
     }
 
 };
@@ -211,6 +251,11 @@ private:
 
 public:
     void onRead(NimBLECharacteristic* pCharacteristic) override {
+        if (!provisioningComplete) {
+            Serial.println("Provisioning not completed. Transmission blocked.");
+            return;  // Blokuje wszelkie działania
+        }
+
         chunkSize = currentMTUSize - 3;
 
 
@@ -290,6 +335,10 @@ public:
 // Characteristic response for successful message transmission
 class ConfirmationCallbacks : public NimBLECharacteristicCallbacks {
     void onWrite(NimBLECharacteristic* pCharacteristic) override {
+        if (!provisioningComplete) {
+            Serial.println("Provisioning not completed. Transmission blocked.");
+            return;  // Blokuje wszelkie działania
+        }
         std::string confirmation = pCharacteristic->getValue();
 
         if (confirmation == "OK"){
@@ -303,6 +352,10 @@ class ConfirmationCallbacks : public NimBLECharacteristicCallbacks {
 // Characteristic response for successful time data transmission
 class TimeSyncCallbacks : public NimBLECharacteristicCallbacks {
     void onWrite(NimBLECharacteristic* pCharacteristic) override {
+        if (!provisioningComplete) {
+            Serial.println("Provisioning not completed. Transmission blocked.");
+            return;  // Blokuje wszelkie działania
+        }
         std::string value = pCharacteristic->getValue();
 
         // IMPORANT: send UNIX timestamp (seconds passed since 1970-01-01 00:00:00 UTC)
@@ -403,6 +456,13 @@ void setup() {
             NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
         );
         pFilesToSendCharacteristic->setCallbacks(filesToSendCallbacks);
+
+        privateKeyCallbacks = new PrivateKeyCallbacks();
+        pPrivateKeyCharacteristic = pService->createCharacteristic(
+            PRIVATE_KEY_UUID,
+            NIMBLE_PROPERTY::WRITE
+        );
+        pPrivateKeyCharacteristic->setCallbacks(privateKeyCallbacks);
 
     pService->start();
 
