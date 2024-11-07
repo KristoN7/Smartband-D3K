@@ -4,9 +4,10 @@
 #include <MAX30105.h>
 #include <MPU6050.h>
 
-//MicroSD
+//MicroSD (using SdFat instead of SD)
 #include <SPI.h>
-#include <SD.h>
+#include <SdFat.h>
+#include <SD.h> 
 
 // Wifi and BLE
 #include <WiFi.h>
@@ -14,11 +15,6 @@
 #include <NimBLEUtils.h>
 #include <NimBLEServer.h>
 
-//JSON
-//#include <ArduinoJson.h>
-
-//Time, note: send bytes in Little Endian
-#include <time.h>
 
 //Working states 
 #define LED_PIN_IDLE 15
@@ -29,7 +25,7 @@
 
 //Error codes
 #define ERROR_SD_NOT_FOUND 1
-#define ERROR_SD_CORRUPT 2
+#define ERROR_SD_ERROR 2
 #define ERROR_SENSOR_MPU6050 3
 #define ERROR_SENSOR_MAX30102 4
 #define ERROR_NO_STORAGE 5
@@ -70,15 +66,19 @@ unsigned long lastStateChangeTime = 0;  // time since the last state change, for
 #define FIRMWARE_VERSION_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130022"
 #define FILES_TO_SEND_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130023"
 
-//SD Card
+//SD Card using SdFat
 #define CS_PIN 5
+SdFat sdCard;
+SdFile dataFile;
+SdFile root;
+SdFile entry;
 
 // Definitions for voltage divider and Li-Po battery
 
 #define MAX_ADC_VALUE 4095  // Maximum ADC value for ESP32 (12-bit)
 #define REFERENCE_VOLTAGE 3.3  // Reference voltage for ADC (ESP32 power supply)
-#define R1 1000.0  // R1 = 1 kΩ
-#define R2 2000.0  // R2 = 2 kΩ
+#define R1 1000000.0  // R1 = 100 kΩ
+#define R2 2000000.0  // R2 = 200 kΩ
 
 // Voltage range for Li-Po battery (full charge and minimum safe voltage)
 #define FULL_BATTERY_VOLTAGE 4.08
@@ -110,20 +110,18 @@ NimBLECharacteristicCallbacks* filesToSendCallbacks = nullptr;
 bool deviceConnected = false;
 uint16_t currentMTUSize = 23;
 
-//For wifi connection (withheld)
+//For wifi connection to OTA
 String ssid = "";
 String password = "";
 
 MAX30105 sensorMAX;
 MPU6050 sensorMPU;
 
-File dataFile;
 char filename[32];
-//char filenameJSON[32];
 int fileIndex = 1; //Used to create new files with new names automatically
 int currentFileIndex = 1;  // last file sent +1
 
-//The difference between these will define the sample rate (initially 10 miliseconds)
+//The difference between these will define the sample rate (initially 10 milliseconds)
 unsigned long sampleStartTime = 0;
 unsigned long sampleEndTime = 0;
 const int samplingRateInMillis = 10;
@@ -140,25 +138,25 @@ unsigned long smartbandTakenOffTime = 0;
 
 //For checking if any device connects with smartband through BLE
 unsigned long bleDisconnection = 0; //when this reaches the bleTimeout, the device goes from BLE to IDLE state
-const unsigned long bleTimeout = 180000;
+const unsigned long bleTimeout = 180000; //3 minutes
 
 //Buffer to SDCard input optimization
-const size_t bufferSize = 8192; // 512 bytes buffer, todo: check if it is proper
+const size_t bufferSize = 8192; // 8192 bytes
 char sdBuffer[bufferSize];  // Buffer to store data before writing to SD card
 size_t bufferIndex = 0;     // Current position in the buffer
 
 //Firmware (change manually)
-const String firmwareVersion = "V19";
+const String firmwareVersion = "V21";
 
 // Resources: battery level and space on SD card
 unsigned long lastResourceCheckTime = 0;
-const unsigned long resourceCheckInterval = 30000; // 30 seconds
+const unsigned long resourceCheckInterval = 20000; // 20 seconds
 
 //For checking whether sensors are working properly
 const unsigned long sensorCheckInterval = 20000; // 20 secods
 unsigned long lastSensorCheckTime = 0;
-bool max30102Working = true;
-bool mpu6050Working = true;
+bool max30102Working = false;
+bool mpu6050Working = false;
 
 //FUNCTIONS
 
@@ -182,14 +180,14 @@ void checkMpu6050(int16_t ax, int16_t ay, int16_t az) {
 
 bool isSpaceAvailable() {
     if (!SD.begin(CS_PIN)) {
-        Serial.println("SD Card Fail");
+        Serial.println("SD Card failed while isSpaceAvailable()");
+        currentState = ERROR;
+        stateChanged = true;
         return false; 
     }
 
     uint64_t totalBytes = SD.totalBytes();
     uint64_t usedBytes = SD.usedBytes();
-    
-    SD.end();
 
     return (totalBytes - usedBytes) >= (0.05 * totalBytes);
 }
@@ -197,25 +195,30 @@ bool isSpaceAvailable() {
 int countTrainingFiles() {
     int fileCount = 0;
     
-    if (!SD.begin(CS_PIN)) {
-        Serial.println("SD Card Fail");
-        return 99; 
+    if (!sdCard.begin(CS_PIN, SD_SCK_MHZ(25))) {
+        Serial.println("SD Card failed while countTrainingFiles()");
+        currentState = ERROR;
+        stateChanged = true;
+        return 0; //number that seems unlikely to reach
     }
 
     char filename[32];
 
-    File root = SD.open("/");
-    File entry = root.openNextFile();
-    while (entry) {
-        String filename = entry.name();
-        if (filename.startsWith("training_") && filename.endsWith(".bin")) {
+    if (!root.open("/")) {
+        Serial.println("Failed to open root directory");
+        return 0;
+    }
+
+    while (entry.openNext(&root, O_RDONLY)) {
+        entry.getName(filename, sizeof(filename));
+        if (strncmp(filename, "training_", 9) == 0 && strstr(filename, ".bin")) {
             fileCount++;
         }
         entry.close();
-        entry = root.openNextFile();
     }
 
-    SD.end();
+    root.close();
+    // SD.end(); // Not necessary for SdFat
     return fileCount;
 }
 
@@ -223,12 +226,12 @@ void signalError(int errorCode) {
     for (int i = 0; i < errorCode; i++) {
         digitalWrite(LED_PIN_BLE, HIGH);
         digitalWrite(LED_PIN_TRAINING, HIGH);
-        delay(500);
+        delay(300);
         digitalWrite(LED_PIN_BLE, LOW);
         digitalWrite(LED_PIN_TRAINING, LOW);
-        delay(500);
+        delay(300);
     }
-    delay(2000); 
+    delay(1000); 
 }
 
 
@@ -251,7 +254,7 @@ unsigned long getCurrentTime() {
 
 // Function to calculate battery percentage
 int calculateBatteryPercentage(float batteryVoltage) {
-    // Ensure the voltage is within the range from 3.15V to 4.2V
+    // Ensure the voltage is within the range from 3.15V to 4.08V
     if (batteryVoltage >= FULL_BATTERY_VOLTAGE) {
         return 100;
     } else if (batteryVoltage <= LOW_BATTERY_VOLTAGE) {
@@ -279,32 +282,18 @@ float readBatteryVoltage() {
 
 void startTraining() {
 
-    unsigned long trainingStartTime = getCurrentTime() + 3600; //3600, because Poland is in UTC+1 timezone
-
+    smartbandTakenOffTime = 0;
     do {
-          snprintf(filename, sizeof(filename), "/training_%d.bin", fileIndex++); 
-    } while (SD.exists(filename));
-        
-    dataFile = SD.open(filename, FILE_WRITE);
-    if (!dataFile) {
-        Serial.println("Failed to open file for writing");
+        snprintf(filename, sizeof(filename), "/training_%d.bin", fileIndex++);
+    } while (sdCard.exists(filename));
+
+    if (!dataFile.open(filename, O_RDWR | O_CREAT | O_AT_END)) {
+        Serial.println("Failed to open file for writing with SdFat");
         return;
     }
 
-    /* Only UNIX timestamp will be sent
-    //Saving time in UTC
-    char timeString[30];
-    struct tm *timeInfo = gmtime((time_t *)&trainingStartTime);
-    strftime(timeString, sizeof(timeString), "%Y-%m-%d %H:%M:%S", timeInfo);
-    */
-
-    // CSV header, moved to .BIN files
-    //dataFile.printf("Training start time (UTC): %s\n", timeString); //UTC
-    //dataFile.printf("%s\n", timeString); //UTC
-    //dataFile.printf("%lu\n", trainingStartTime); //UNIX
-    //dataFile.println("IR,RED,Ax,Ay,Az");
-
-    //UNIX first
+    unsigned long trainingStartTime = getCurrentTime() + 3600; //3600 for Poland's UTC+1 timezone offset
+    // Writing the UNIX timestamp as binary data
     dataFile.write((uint8_t*)&trainingStartTime, sizeof(trainingStartTime));
 
     Serial.printf("Started training session: %s, time: %lu\n", filename, trainingStartTime);
@@ -315,8 +304,8 @@ void flushBufferToSD() {
         return; // Nothing to flush
     }
 
-    // Ensure SD card is open before writing
-    if (!dataFile) {
+    // Ensure the file is open before writing
+    if (!dataFile.isOpen()) {
         Serial.println("SD card not ready for writing");
         return;
     }
@@ -324,18 +313,17 @@ void flushBufferToSD() {
     // Write buffer content to SD card
     dataFile.write((uint8_t*)sdBuffer, bufferIndex);
 
+    Serial.println(dataFile.size());
     // Clear buffer
     bufferIndex = 0;
 }
 
 void collectAndBufferData() {
-    
     uint32_t irValue = sensorMAX.getIR();
     uint32_t redValue = sensorMAX.getRed();
-
-    int16_t ax, ay, az; //accelerometer data
+    int16_t ax, ay, az;
     //int16_t gx, gy, gz; //gyroscope data
-    //sensorMPU.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+    //sensorMPU.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);   
     sensorMPU.getAcceleration(&ax, &ay, &az);
 
     unsigned long currentTime = millis();
@@ -353,20 +341,18 @@ void collectAndBufferData() {
         }
     }
 
-    if(irValue < 5000 && smartbandTakenOffTime == 0){
+    
+    if (irValue < 5000 && smartbandTakenOffTime == 0) {
         smartbandTakenOffTime = millis();
-    } 
-    else if(irValue < 5000 && millis() - smartbandTakenOffTime >= 15000 && smartbandTakenOffTime > 0){ //15 seconds
+    } else if (irValue < 5000 && millis() - smartbandTakenOffTime >= 15000 && smartbandTakenOffTime > 0) { // 15 seconds
         Serial.println("Device is not worn, proceeding to IDLE");
         currentState = IDLE;
         stateChanged = true;
         smartbandTakenOffTime = 0;
-    }
-        
-    else if(smartbandTakenOffTime > 0 && irValue>=5000){
+    } else if (smartbandTakenOffTime > 0 && irValue >= 5000) {
         smartbandTakenOffTime = 0;
     }
-
+    
     if (bufferIndex + sizeof(irValue) + sizeof(redValue) + sizeof(ax) * 3 >= bufferSize) {
         flushBufferToSD();
     }
@@ -381,33 +367,15 @@ void collectAndBufferData() {
     bufferIndex += sizeof(ay);
     memcpy(&sdBuffer[bufferIndex], &az, sizeof(az));
     bufferIndex += sizeof(az);
-
-    /* CSV files, moved to BIN files
-    // Prepare data as a CSV formatted string
-    char dataLine[128];  // Assuming each line will not exceed 128 characters
-    int len = snprintf(dataLine, sizeof(dataLine), "%ld,%ld,%d,%d,%d\n", irValue, redValue, ax, ay, az);
-        
-    // Check if the data fits into the buffer
-    if (bufferIndex + len >= bufferSize) {
-        // Buffer is full, flush to SD card
-        flushBufferToSD();
-    }
-
-    // Append data to the buffer
-    memcpy(&sdBuffer[bufferIndex], dataLine, len);
-    bufferIndex += len;    
-    */
 }
 
 void endTraining() {
     flushBufferToSD();
 
-    if(dataFile){
+    if (dataFile.isOpen()) {
         dataFile.close();
         Serial.println("SD file closed");
     }
-
-    //TODO: check if closed properly
 }
 
 bool isWorn() {
@@ -419,13 +387,13 @@ bool isWorn() {
     }
 }
 
-//Wifi connection withheld, all data is being send through BLE. 
+// WiFi connection setup
 void connectToWiFi() {
     Serial.print("Connecting to WiFi with SSID: ");
     Serial.println(ssid);
     Serial.print("Password: ");
     Serial.println(password);
-    
+
     WiFi.disconnect(true); // Reset WiFi
     delay(1000);
 
@@ -447,8 +415,8 @@ void connectToWiFi() {
     }
 }
 
-//Callback to connect to WiFi, works, but not used
-class CharacteristicCallbacks: public NimBLECharacteristicCallbacks {
+// BLE characteristic callbacks
+class CharacteristicCallbacks : public NimBLECharacteristicCallbacks {
     void onWrite(NimBLECharacteristic* pCharacteristic) override {
         Serial.println("Attempting to write new credentials.");
         std::string uuid = pCharacteristic->getUUID().toString();
@@ -473,7 +441,6 @@ class CharacteristicCallbacks: public NimBLECharacteristicCallbacks {
             password = value;
             Serial.print("Received Password: ");
             Serial.println(password.c_str());
-            // Attempt to connect to WiFi
             connectToWiFi();
         }
     }
@@ -512,8 +479,8 @@ public:
 //Callback for sending training files to apps
 class FileTransferCallbacks : public NimBLECharacteristicCallbacks {
 private:
-    File file;
-    size_t chunkSize = currentMTUSize - 3; // based on MTU size and performance
+    SdFile file;
+    size_t chunkSize = currentMTUSize - 3; // based on MTU size
     size_t fileSize = 0;
     size_t bytesSent = 0;
     bool transferInProgress = false;
@@ -525,7 +492,7 @@ public:
     void onRead(NimBLECharacteristic* pCharacteristic) override {
         chunkSize = currentMTUSize - 3;
         if (!transferInProgress && !sendEndMessage) {
-            if (!SD.begin(CS_PIN)) {
+            if (!sdCard.begin(CS_PIN, SD_SCK_MHZ(25))) {
                 Serial.println("Card Mount Failed");
                 currentState = ERROR;
                 stateChanged = true;
@@ -536,15 +503,14 @@ public:
 
         if(!messageSizeSent){
             sendMessageSize(pCharacteristic);
-        }
-        else if (transferInProgress) {
-            sendNextChunk(pCharacteristic);
         } 
-        else if (sendEndMessage){
+        else if(transferInProgress){
+            sendNextChunk(pCharacteristic);
+        }
+        else if(sendEndMessage){
             sendEnd(pCharacteristic);
         }
     }
-
 
     void sendMessageSize(NimBLECharacteristic* pCharacteristic) {
         uint32_t messageSize = fileSize;
@@ -563,20 +529,16 @@ public:
         Serial.printf("Sent message size: %d bytes\n", messageSize);
     }
 
-
     void startFileTransfer(const char* fileName) {
         delay(10);
-        
         currentFileName = String(fileName);
 
-        file = SD.open(fileName, FILE_READ);
-        
-        if (!file) {
+        if (!file.open(fileName, O_RDONLY)) {
             Serial.println("Failed to open file for reading");
-            sendNextFile(); //todo: check if it is working properly. 
+            sendNextFile(); // Move to the next file if this one fails
         }
 
-        fileSize = file.size();
+        fileSize = file.fileSize();
         bytesSent = 0;
         transferInProgress = true;
 
@@ -584,9 +546,9 @@ public:
     }
 
     void sendNextChunk(NimBLECharacteristic* pCharacteristic) {
-        if (!file || !file.available()) {
+        if (!file.isOpen() || !file.available()) {
             file.close();
-            SD.end();
+            sdCard.end();
             transferInProgress = false;
             Serial.println("File transfer completed");
             return;
@@ -594,7 +556,14 @@ public:
 
         // Read the next chunk
         uint8_t buffer[chunkSize];
-        size_t bytesRead = file.read(buffer, chunkSize);
+        int32_t bytesRead = file.read(buffer, chunkSize);
+        if (bytesRead <= 0) {
+            Serial.println("Failed to read from file");
+            file.close();
+            sdCard.end();
+            transferInProgress = false;
+            return;
+        }
 
         // Send the chunk
         pCharacteristic->setValue(buffer, bytesRead);
@@ -614,7 +583,6 @@ public:
     void sendEnd(NimBLECharacteristic* pCharacteristic) {
         //const char* endMessage = "END";
         uint8_t endMessage[16] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}; //16 bytes of only zeroes, very unlikely for the sensors to give that data
-        //pCharacteristic->setValue((uint8_t*)endMessage, strlen(endMessage));
         pCharacteristic->setValue(endMessage, sizeof(endMessage));
         pCharacteristic->notify();
 
@@ -626,14 +594,16 @@ public:
     }
 
     void deleteFile() {
-
-        if (!SD.begin(CS_PIN)) {
-            Serial.println("SD Card Fail"); 
+        if (!sdCard.begin(CS_PIN, SD_SCK_MHZ(25))) {
+            Serial.println("SD Card Fail");
+            currentState = ERROR;
+            stateChanged = true;
+            return;
         }
 
-        if (!currentFileName.isEmpty() && SD.exists(currentFileName.c_str())) {
-            if (SD.remove(currentFileName.c_str())) {
-                Serial.print("File deleted from SD card. File deleted: ");
+        if (!currentFileName.isEmpty() && sdCard.exists(currentFileName.c_str())) {
+            if (sdCard.remove(currentFileName.c_str())) {
+                Serial.print("File deleted from SD card: ");
                 Serial.println(currentFileName);
             } else {
                 Serial.println("Failed to delete file from SD card.");
@@ -642,20 +612,19 @@ public:
             Serial.println("Invalid file name or file does not exist.");
         }
 
-        SD.end();
+        sdCard.end();
     }
 
     void sendNextFile() {
-
         char filename[32];
         currentFileIndex = 1;
 
         while (true) {
             snprintf(filename, sizeof(filename), "/training_%d.bin", currentFileIndex);
-            if (SD.exists(filename)) {
+            if (sdCard.exists(filename)) {
                 Serial.print("Found file to send: ");
                 Serial.println(filename);
-                startFileTransfer(filename); 
+                startFileTransfer(filename);
                 return;
             } else {
                 currentFileIndex++;
@@ -672,11 +641,11 @@ public:
         sendEndMessage = false;
         messageSizeSent = false;
         bytesSent = 0;
-        if (file) {
+        if (file.isOpen()) {
             file.close();
             Serial.println("File closed after disconnection.");
         }
-        SD.end();
+        sdCard.end();
     }
 };
 
@@ -752,7 +721,7 @@ void setup() {
     pinMode(LED_PIN_IDLE, OUTPUT);
     pinMode(LED_PIN_BLE, OUTPUT);
     pinMode(LED_PIN_TRAINING, OUTPUT);
-    pinMode(BUTTON_PIN, INPUT_PULLUP); //using an inner built-in resistor on ESP32
+    pinMode(BUTTON_PIN, INPUT_PULLUP); // using an inner built-in resistor on ESP32
     pinMode(BATTERY_PIN, INPUT);  // Set up the ADC pin for battery voltage readings
 
     attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), handleButtonPress, CHANGE);
@@ -771,7 +740,6 @@ void setup() {
     sensorMAX.setPulseAmplitudeRed(0);
     sensorMAX.setPulseAmplitudeIR(0);
 
-
     // MPU6050 initialization
     sensorMPU.initialize();
     while(!sensorMPU.testConnection()) {
@@ -780,106 +748,83 @@ void setup() {
     }
     sensorMPU.setSleepEnabled(true);
 
-    // SD card module initalization
-    while (!SD.begin(CS_PIN)) {
+    // SD card module initialization
+    if (!sdCard.begin(CS_PIN, SD_SCK_MHZ(25))) { 
         Serial.println("Card Mount Failed");
         signalError(ERROR_SD_NOT_FOUND);
     }
 
-    uint8_t cardType = SD.cardType();
-    if (cardType == CARD_NONE) {
-        Serial.println("No SD card attached");
-        return;
-    }
 
-     Serial.println("SD Card initialized.");
 
-     Serial.print("SD Card Type: ");
-    if (cardType == CARD_MMC) {
-        Serial.println("MMC");
-    } else if (cardType == CARD_SD) {
-        Serial.println("SDSC");
-    } else if (cardType == CARD_SDHC) {
-        Serial.println("SDHC");
-    } else {
-        Serial.println("UNKNOWN");
-    }
-
-    uint64_t cardSize = SD.cardSize() / (1024 * 1024);
+    uint64_t cardSize = (sdCard.card()->sectorCount() * 512ULL) / (1024 * 1024);
     Serial.printf("SD Card Size: %lluMB\n", cardSize);
 
-    // Header
-    //todo: check if it is still neccessary
-    dataFile.println("IR, Red, Ax, Ay, Az, Gx, Gy, Gz");
-    dataFile.close();
+    delay(500); // for power stabilization
 
-    delay(500); //for power stabilization
-
-    //BLE initizalization
-                    
+    // BLE initialization
     NimBLEDevice::init("ESP32 D3K");
     NimBLEDevice::setMTU(512);
 
     pServer = NimBLEDevice::createServer();
     pServer->setCallbacks(new ServerCallbacks());
-                
-    pService = pServer->createService(SERVICE_UUID);        
 
-        ssidCallbacks = new CharacteristicCallbacks();
-        pSsidCharacteristic = pService->createCharacteristic(
-            SSID_CHAR_UUID,
-            NIMBLE_PROPERTY::WRITE
-        );
-        pSsidCharacteristic->setCallbacks(ssidCallbacks);
+    pService = pServer->createService(SERVICE_UUID);
 
-        passwordCallbacks = new CharacteristicCallbacks();
-        pPasswordCharacteristic = pService->createCharacteristic(
-            PASSWORD_CHAR_UUID,
-            NIMBLE_PROPERTY::WRITE
-        );
-        pPasswordCharacteristic->setCallbacks(passwordCallbacks);
+    ssidCallbacks = new CharacteristicCallbacks();
+    pSsidCharacteristic = pService->createCharacteristic(
+        SSID_CHAR_UUID,
+        NIMBLE_PROPERTY::WRITE
+    );
+    pSsidCharacteristic->setCallbacks(ssidCallbacks);
 
-        fileTransferCallbacks = new FileTransferCallbacks();
-        pFileTransferCharacteristic = pService->createCharacteristic(
-            FILE_TRANSFER_UUID,
-            NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
-        );
-        pFileTransferCharacteristic->setCallbacks(fileTransferCallbacks);
+    passwordCallbacks = new CharacteristicCallbacks();
+    pPasswordCharacteristic = pService->createCharacteristic(
+        PASSWORD_CHAR_UUID,
+        NIMBLE_PROPERTY::WRITE
+    );
+    pPasswordCharacteristic->setCallbacks(passwordCallbacks);
 
-        confirmationCallbacks = new ConfirmationCallbacks();
-        pConfirmationCharacteristic = pService->createCharacteristic(
-            CONFIRMATION_UUID,
-            NIMBLE_PROPERTY::WRITE
-        );
-        pConfirmationCharacteristic->setCallbacks(confirmationCallbacks);
+    fileTransferCallbacks = new FileTransferCallbacks();
+    pFileTransferCharacteristic = pService->createCharacteristic(
+        FILE_TRANSFER_UUID,
+        NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
+    );
+    pFileTransferCharacteristic->setCallbacks(fileTransferCallbacks);
 
-        timeSyncCallbacks = new TimeSyncCallbacks();
-        pTimeSyncCharacteristic = pService->createCharacteristic(
-            TIME_SYNC_UUID,
-            NIMBLE_PROPERTY::WRITE
-        );
-        pTimeSyncCharacteristic->setCallbacks(timeSyncCallbacks);
+    confirmationCallbacks = new ConfirmationCallbacks();
+    pConfirmationCharacteristic = pService->createCharacteristic(
+        CONFIRMATION_UUID,
+        NIMBLE_PROPERTY::WRITE
+    );
+    pConfirmationCharacteristic->setCallbacks(confirmationCallbacks);
 
-        batteryStatusCallbacks = new BatteryStatusCallbacks();
-        pBatteryStatusCharacteristic = pService->createCharacteristic(
-            BATT_LEVEL_UUID,
-            NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
-        );
-        pBatteryStatusCharacteristic->setCallbacks(batteryStatusCallbacks);
+    timeSyncCallbacks = new TimeSyncCallbacks();
+    pTimeSyncCharacteristic = pService->createCharacteristic(
+        TIME_SYNC_UUID,
+        NIMBLE_PROPERTY::WRITE
+    );
+    pTimeSyncCharacteristic->setCallbacks(timeSyncCallbacks);
 
-        revisionNumberCallbacks = new RevisionNumberCallbacks();
-        pRevisionNumberCharacteristic = pService->createCharacteristic(
-            FIRMWARE_VERSION_UUID,
-            NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
-        );
-        pRevisionNumberCharacteristic->setCallbacks(revisionNumberCallbacks);
+    batteryStatusCallbacks = new BatteryStatusCallbacks();
+    pBatteryStatusCharacteristic = pService->createCharacteristic(
+        BATT_LEVEL_UUID,
+        NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
+    );
+    pBatteryStatusCharacteristic->setCallbacks(batteryStatusCallbacks);
 
-        filesToSendCallbacks = new FilesToSendCallbacks();
-        pFilesToSendCharacteristic = pService->createCharacteristic(
-            FILES_TO_SEND_UUID,
-            NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
-        );
-        pFilesToSendCharacteristic->setCallbacks(filesToSendCallbacks);
+    revisionNumberCallbacks = new RevisionNumberCallbacks();
+    pRevisionNumberCharacteristic = pService->createCharacteristic(
+        FIRMWARE_VERSION_UUID,
+        NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
+    );
+    pRevisionNumberCharacteristic->setCallbacks(revisionNumberCallbacks);
+
+    filesToSendCallbacks = new FilesToSendCallbacks();
+    pFilesToSendCharacteristic = pService->createCharacteristic(
+        FILES_TO_SEND_UUID,
+        NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
+    );
+    pFilesToSendCharacteristic->setCallbacks(filesToSendCallbacks);
 
     pService->start();
 
@@ -888,70 +833,67 @@ void setup() {
     pAdvertising->start();
 
     Serial.println("BLE initialized");
-    
-    //IDLE MODE IN THE BEGINNING
 
+    // IDLE MODE IN THE BEGINNING
     digitalWrite(LED_PIN_IDLE, HIGH);
     digitalWrite(LED_PIN_BLE, LOW);
     digitalWrite(LED_PIN_TRAINING, LOW);
-    SD.end();
+    sdCard.end();
     Serial.println("Initial idle mode");
-
-
 }
 
 void loop() {
 
-if (buttonInterruptOccurred || buttonPressed) {
-    buttonInterruptOccurred = false; 
+    if (buttonInterruptOccurred || buttonPressed) {
+        buttonInterruptOccurred = false; 
 
-    unsigned long currentTime = millis();
+        unsigned long currentTime = millis();
 
-    // debounce check
-    if ((currentTime - lastDebounceTime) > debounceDelay) { 
-        lastDebounceTime = currentTime;  // debounce time
+        // debounce check
+        if ((currentTime - lastDebounceTime) > debounceDelay) { 
+            lastDebounceTime = currentTime;  // debounce time
 
-        if (digitalRead(BUTTON_PIN) == LOW && !buttonPressed) {
-            //button pressed, LOW
-            buttonPressed = true; 
-            buttonPressTime = currentTime;
-        } 
-        else if (digitalRead(BUTTON_PIN) == HIGH && buttonPressed) {
-            //button not pressed, HIGH
-            buttonPressed = false;
+            if (digitalRead(BUTTON_PIN) == LOW && !buttonPressed) {
+                 //button pressed, LOW
+                buttonPressed = true; 
+                buttonPressTime = currentTime;
+            } 
+            else if (digitalRead(BUTTON_PIN) == HIGH && buttonPressed) {
+                //button not pressed, HIGH
+                buttonPressed = false;
 
-            // check if it was short or long press
-            if (currentTime - buttonPressTime < longPressThreshold) {
-                // short press
-                if (currentTime - lastStateChangeTime > stateChangeDelay) {
-                    // shor press, but change only if 1 second has passed since the last state change
-                    if (currentState == IDLE) {
-                        currentState = BLE;
-                    } else if (currentState == BLE) {
-                        currentState = IDLE;
-                    } else if (currentState == TRAINING) {
-                        currentState = IDLE;
+                // check if it was short or long press
+                if (currentTime - buttonPressTime < longPressThreshold) {
+                    // short press
+                    if (currentTime - lastStateChangeTime > stateChangeDelay) {
+                        // short press, but change only if 1 second has passed since the last state change
+                        if (currentState == IDLE) {
+                            currentState = BLE;
+                        } else if (currentState == BLE) {
+                            currentState = IDLE;
+                        } else if (currentState == TRAINING) {
+                            currentState = IDLE;
+                        }
+                        lastStateChangeTime = currentTime; 
                     }
+                } else if(currentState != TRAINING){
+                    // long press
+                    currentState = TRAINING;  
                     lastStateChangeTime = currentTime; 
                 }
-            } else if(currentState != TRAINING){
-                // long press
-                currentState = TRAINING;  
-                lastStateChangeTime = currentTime; 
+                else{
+                    currentState = IDLE;
+                }
+                stateChanged = true; 
             }
-            else{
-                currentState = IDLE;
+            else if(digitalRead(BUTTON_PIN) == LOW && buttonPressed && currentTime - buttonPressTime >= longPressThreshold && currentState != TRAINING){
+                currentState = TRAINING;
+                stateChanged = true;
+                buttonPressed = false;
+                lastStateChangeTime = currentTime;
             }
-            stateChanged = true; 
-        }
-        else if(digitalRead(BUTTON_PIN) == LOW && buttonPressed && currentTime - buttonPressTime >= longPressThreshold && currentState != TRAINING){
-            currentState = TRAINING;
-            stateChanged = true;
-            buttonPressed = false;
-            lastStateChangeTime = currentTime;
         }
     }
-}
 
     if (stateChanged) {
         float batteryVoltage = readBatteryVoltage();
@@ -963,64 +905,14 @@ if (buttonInterruptOccurred || buttonPressed) {
                 digitalWrite(LED_PIN_BLE, LOW);
                 digitalWrite(LED_PIN_TRAINING, LOW);
                 
-                endTraining();  // closing the CSV file
+                endTraining();
                 checkIfIsWorn = false;
-                //convertCsvToJson(filename, filenameJSON);  // JSON conversion, moved to mobile apps      
 
                 if (pAdvertising != nullptr && pAdvertising->isAdvertising()) {
                     pAdvertising->stop();
                 }
 
-                /*
-                if (pServer != nullptr || pAdvertising != nullptr || pService != nullptr) {
-                    NimBLEDevice::deinit(true);
-                    pServer = nullptr;
-                    pService = nullptr;
-                    pAdvertising = nullptr;
-                }
-
-                if (ssidCallbacks != nullptr) {
-                    delete ssidCallbacks;
-                    ssidCallbacks = nullptr;
-                }
-
-                if (passwordCallbacks != nullptr) {
-                    delete passwordCallbacks;
-                    passwordCallbacks = nullptr;
-                }
-
-                if (fileTransferCallbacks != nullptr) {
-                    delete fileTransferCallbacks;
-                    fileTransferCallbacks = nullptr;
-                }
-
-                if (confirmationCallbacks != nullptr) {
-                    delete confirmationCallbacks;
-                    confirmationCallbacks = nullptr;
-                }
-
-                if (timeSyncCallbacks != nullptr) {
-                    delete timeSyncCallbacks;
-                    timeSyncCallbacks = nullptr;
-                }
-
-                if (batteryStatusCallbacks != nullptr){
-                    delete batteryStatusCallbacks;
-                    batteryStatusCallbacks = nullptr;
-                } 
-
-                if (revisionNumberCallbacks != nullptr){
-                    delete revisionNumberCallbacks;
-                    revisionNumberCallbacks = nullptr;
-                } 
-
-                if (filesToSendCallbacks != nullptr){
-                    delete filesToSendCallbacks;
-                    filesToSendCallbacks = nullptr;
-                } 
-                */
-
-                SD.end();
+                sdCard.end(); 
                 
                 sensorMAX.setPulseAmplitudeRed(0);
                 sensorMAX.setPulseAmplitudeIR(0);
@@ -1029,11 +921,10 @@ if (buttonInterruptOccurred || buttonPressed) {
                 Serial.println("Idle mode");
 
                 esp_sleep_enable_ext0_wakeup(GPIO_NUM_13, 0);  // 0 = LOW level to trigger wakeup
-                esp_light_sleep_start();  // Device will sleep here until GPIO13 wakes it
+                esp_light_sleep_start(); // Device will sleep here until GPIO13 wakes it
                 break;
 
             case BLE: // BLE state, BLE server is on, should broadcast
-
                 // Check whether battery voltage is high enough 
                 if (batteryVoltage < 3.15) {
                     Serial.println("Low battery level. Recharge");
@@ -1046,8 +937,8 @@ if (buttonInterruptOccurred || buttonPressed) {
                 digitalWrite(LED_PIN_BLE, HIGH);
                 digitalWrite(LED_PIN_TRAINING, LOW);
 
-                if (!SD.begin(CS_PIN)) {
-                    Serial.println("Card Mount Failed");
+                if (!sdCard.begin(CS_PIN, SD_SCK_MHZ(25))) {  // Use SdFat object for initialization
+                    Serial.println("Card Mount failed during BLE initalization state");
                     currentState = ERROR;
                     stateChanged = true;
                 }
@@ -1059,10 +950,8 @@ if (buttonInterruptOccurred || buttonPressed) {
                     Serial.println("BLE advertising started.");
                 }
 
-                endTraining();  // closing the CSV file
-
+                endTraining();
                 checkIfIsWorn = false;
-
                 bleDisconnection = millis();
 
                 sensorMAX.setPulseAmplitudeRed(0);
@@ -1070,11 +959,10 @@ if (buttonInterruptOccurred || buttonPressed) {
                 sensorMPU.setSleepEnabled(true);
 
                 Serial.println("BLE mode activated and advertising started");
-            break;
+                break;
 
             case TRAINING: // Exercise state, collect data from sensors
-
-                // Check whether battery voltage is high enough 
+            // Check whether battery voltage is high enough 
                 if (batteryVoltage < 3.15) {
                     Serial.println("Low battery level. Recharge");
                     currentState = IDLE;
@@ -1096,7 +984,6 @@ if (buttonInterruptOccurred || buttonPressed) {
 
                 sensorMAX.setup(); // Configure sensor with default settings
                 sensorMAX.setPulseAmplitudeRed(60);
-                //sensorMAX.setPulseAmplitudeIR(0x0A); //dont need to set it, the default setting have IR powered already
                 sensorMAX.setSampleRate(0x18);
                 sensorMAX.setFIFOAverage(8);
                 sensorMPU.setSleepEnabled(false);
@@ -1105,58 +992,8 @@ if (buttonInterruptOccurred || buttonPressed) {
                 digitalWrite(LED_PIN_BLE, LOW);
                 digitalWrite(LED_PIN_TRAINING, HIGH);
 
-                /*
-                if (pServer != nullptr || pAdvertising != nullptr || pService != nullptr) {
-                    NimBLEDevice::deinit(true);
-                    pServer = nullptr;
-                    pService = nullptr;
-                    pAdvertising = nullptr;
-                }
-
-                if (ssidCallbacks != nullptr) {
-                    delete ssidCallbacks;
-                    ssidCallbacks = nullptr;
-                }
-
-                if (passwordCallbacks != nullptr) {
-                    delete passwordCallbacks;
-                    passwordCallbacks = nullptr;
-                }
-
-                if (fileTransferCallbacks != nullptr) {
-                    delete fileTransferCallbacks;
-                    fileTransferCallbacks = nullptr;
-                }
-
-                if (confirmationCallbacks != nullptr) {
-                    delete confirmationCallbacks;
-                    confirmationCallbacks = nullptr;
-                }
-
-                if (timeSyncCallbacks != nullptr) {
-                    delete timeSyncCallbacks;
-                    timeSyncCallbacks = nullptr;
-                }
-
-                if (batteryStatusCallbacks != nullptr){
-                    delete batteryStatusCallbacks;
-                    batteryStatusCallbacks = nullptr;
-                } 
-
-                if (revisionNumberCallbacks != nullptr){
-                    delete revisionNumberCallbacks;
-                    revisionNumberCallbacks = nullptr;
-                } 
-
-
-                if (filesToSendCallbacks != nullptr){
-                    delete filesToSendCallbacks;
-                    filesToSendCallbacks = nullptr;
-                } 
-                */
-
-                if (!SD.begin(CS_PIN)) {
-                    Serial.println("Card Mount Failed");
+                if (!sdCard.begin(CS_PIN, SD_SCK_MHZ(25))) {
+                    Serial.println("Card Mount Failed during training initialization");
                     currentState = ERROR;
                     stateChanged = true;
                 } else {
@@ -1164,12 +1001,11 @@ if (buttonInterruptOccurred || buttonPressed) {
                     checkIfIsWorn = true;
                     trainingStartTime = millis();
                 }
-                
                 break;
 
             case ERROR:
-                while(!SD.begin(CS_PIN)) {
-                    Serial.println("Card Mount Failed");
+                while(!sdCard.begin(CS_PIN, SD_SCK_MHZ(25))) {
+                    Serial.println("Card Mount Failed during ERROR state");
                     signalError(ERROR_SD_NOT_FOUND);
                 }
 
@@ -1178,13 +1014,11 @@ if (buttonInterruptOccurred || buttonPressed) {
                     signalError(ERROR_NO_STORAGE);
                 }
 
-                // MAX30120
                 while(!sensorMAX.begin(Wire, I2C_SPEED_FAST)) {
                     Serial.println("Failed to initialize MAX30102 sensor.");
                     signalError(ERROR_SENSOR_MAX30102);
-
                 }
-                // MPU6050
+                
                 if (!sensorMPU.testConnection()) {
                     Serial.println("Failed to initialize MPU6050 sensor.");
                     signalError(ERROR_SENSOR_MPU6050);
@@ -1195,7 +1029,6 @@ if (buttonInterruptOccurred || buttonPressed) {
                 currentState = IDLE;
                 stateChanged = true;
                 checkIfIsWorn = false;
-
                 break;
 
             default:
@@ -1208,9 +1041,8 @@ if (buttonInterruptOccurred || buttonPressed) {
     }
 
     if(checkIfIsWorn){
-
         if(!isWorn()){
-            if(millis() - trainingStartTime >= 15000){ //15 seconds
+            if(millis() - trainingStartTime >= 15000){  //15 seconds
                 Serial.println("Device is not worn, proceeding to IDLE");
                 currentState = IDLE;
                 stateChanged = true;
@@ -1229,7 +1061,6 @@ if (buttonInterruptOccurred || buttonPressed) {
         if (sampleStartTime - lastResourceCheckTime >= resourceCheckInterval) {
             lastResourceCheckTime = sampleStartTime;
 
-            // Sprawdzenie poziomu baterii
             if (readBatteryVoltage() < 3.15) {
                 Serial.println("Low battery level. Recharge.");
                 endTraining();
@@ -1238,9 +1069,8 @@ if (buttonInterruptOccurred || buttonPressed) {
                 return;
             }
 
-            // Sprawdzenie dostępnego miejsca na karcie SD
             if (!isSpaceAvailable()) {
-                Serial.println("No more space on SD card Send files through BLE.");
+                Serial.println("No more space on SD card. Please send files through BLE.");
                 endTraining();
                 currentState = IDLE;
                 stateChanged = true;
@@ -1252,9 +1082,8 @@ if (buttonInterruptOccurred || buttonPressed) {
 
         do{
             sampleEndTime = millis();
-            //Serial.println(sampleEndTime - sampleStartTime);
-        } while (sampleEndTime - sampleStartTime < samplingRateInMillis); // 10 miliseconds = 100Hz sampling rate
-        
+            //Serial.println(sampleEndTime - sampleStartTime);        
+            } while (sampleEndTime - sampleStartTime < samplingRateInMillis); // 10 miliseconds = 100Hz sampling rate
     }
     
     if(currentState == BLE && !deviceConnected){
