@@ -8,8 +8,6 @@
 //Time, note: send bytes in Little Endian
 #include <time.h>
 
-#include "lz4.h"
-
 // UUIDs for BLE Service and Characteristics
 #define SERVICE_UUID        "12345678-1234-1234-1234-123456789113"
 #define MESSAGE_TRANSFER_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130013"
@@ -211,9 +209,6 @@ private:
     bool sendEndMessage = false;
     bool messageSizeSent = false;
 
-    uint8_t *compressedData = nullptr;
-    size_t compressedSize = 0;
-
 public:
     void onRead(NimBLECharacteristic* pCharacteristic) override {
         chunkSize = currentMTUSize - 3;
@@ -235,7 +230,7 @@ public:
     }
 
     void sendMessageSize(NimBLECharacteristic* pCharacteristic) {
-        uint32_t messageSize = compressedSize;
+        uint32_t messageSize = sampleSize;
         uint8_t sizeBytes[4];
 
         // Little Endian Conversion
@@ -252,34 +247,6 @@ public:
     }
 
     void startMessageTransfer() {
-
-        if (compressedData != nullptr) {
-            free(compressedData);
-        }
-
-        size_t maxCompressedSize = LZ4_compressBound(sampleSize);
-
-        compressedData = (uint8_t*)malloc(maxCompressedSize);
-        if (compressedData == nullptr) {
-            Serial.println("Memory allocation failed for compressed data!");
-            return;
-        }
-
-        compressedSize = LZ4_compress_default((const char *)sampleData, (char *)compressedData, sampleSize, maxCompressedSize);
-
-        if(compressedSize > 0){
-            Serial.printf("Data compressed to %d bytes\n", compressedSize);
-            Serial.printf("Size before compression: %d bytes\n", sampleSize);
-        }
-        else{
-            Serial.println("Compression failed!");
-            compressedSize = sampleSize;
-            memcpy(compressedData, sampleData, compressedSize);
-            //just in case the compression didn't happen, although the app can't process this data properly
-        }
-
-
-
         bytesSent = 0;
         transferInProgress = true;
         messageSizeSent = false;
@@ -289,17 +256,17 @@ public:
 
     void sendNextChunk(NimBLECharacteristic* pCharacteristic) {
         // Calculate the number of bytes left to send
-        size_t bytesRemaining = compressedSize - bytesSent;
+        size_t bytesRemaining = sampleSize - bytesSent;
         size_t bytesToSend = min(chunkSize, bytesRemaining);
 
         // Send the chunk
-        pCharacteristic->setValue(&compressedData[bytesSent], bytesToSend);
+        pCharacteristic->setValue(&sampleData[bytesSent], bytesToSend);
         pCharacteristic->notify();
 
         bytesSent += bytesToSend;
-        Serial.printf("Sent %d/%d bytes\n", bytesSent, compressedSize);
+        Serial.printf("Sent %d/%d bytes\n", bytesSent, sampleSize);
 
-        if (bytesSent >= compressedSize) {
+        if (bytesSent >= sampleSize) {
             transferInProgress = false;
             sendEndMessage = true; // Set flag to send "END" message next
             Serial.println("Message transfer completed");
@@ -317,12 +284,6 @@ public:
         sendEndMessage = false;
         transferInProgress = false;
         messageSizeSent = false;
-    }
-
-    ~MessageTransferCallbacks() {
-        if (compressedData != nullptr) {
-            free(compressedData);
-        }
     }
 };
 
