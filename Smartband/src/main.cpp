@@ -14,7 +14,8 @@
 #include <NimBLEDevice.h>
 #include <NimBLEUtils.h>
 #include <NimBLEServer.h>
-
+#include <HTTPClient.h>
+#include <Update.h>
 
 //Working states 
 #define LED_PIN_IDLE 15
@@ -146,7 +147,7 @@ char sdBuffer[bufferSize];  // Buffer to store data before writing to SD card
 size_t bufferIndex = 0;     // Current position in the buffer
 
 //Firmware (change manually)
-const String firmwareVersion = "V21";
+const String firmwareVersion = "V23";
 
 // Resources: battery level and space on SD card
 unsigned long lastResourceCheckTime = 0;
@@ -390,6 +391,75 @@ bool isWorn() {
     }
 }
 
+void performOTAUpdate(const char* firmwareUrl) {
+    Serial.println("Starting OTA update...");
+
+    HTTPClient http;
+    http.begin(firmwareUrl);  // Use HTTPS with root CA if necessary for secure connection
+    int httpCode = http.GET();
+
+    if (httpCode == HTTP_CODE_OK) {
+        int contentLength = http.getSize();
+        Serial.printf("Content Length: %d bytes\n", contentLength);
+
+        WiFiClient* stream = http.getStreamPtr();
+        if (contentLength > 0 && stream != nullptr) {
+            // Check available free space for OTA
+            size_t freeSpace = ESP.getFreeSketchSpace();
+            Serial.printf("Free space for OTA: %d bytes\n", freeSpace);
+
+            // Check if the available space is sufficient
+            if (contentLength > freeSpace) {
+                Serial.println("Not enough space for OTA update. Exiting...");
+                return;
+            }
+
+            bool canBegin = Update.begin(contentLength);
+            if (!canBegin) {
+                Serial.printf("Unable to start OTA update: %s\n", Update.getError());
+                return;
+            }
+
+            size_t totalRead = 0;
+            uint8_t buffer[128];  // Adjust buffer size as needed
+            while (http.connected() && (totalRead < contentLength)) {
+            size_t availableBytes = stream->available();
+            if (availableBytes > 0) {
+                int bytesToRead = min(availableBytes, sizeof(buffer));
+                int bytesRead = stream->readBytes(buffer, bytesToRead);
+                totalRead += bytesRead;
+
+                // Write data and handle errors
+                size_t written = Update.write(buffer, bytesRead);
+                if (written != bytesRead) {
+                    Serial.printf("Error: Written %d bytes but read %d bytes\n", written, bytesRead);
+                    Update.abort();  // Abort the update process on failure
+                    return;
+                }
+                Serial.printf("Read %d bytes, total read: %d/%d bytes\n", bytesRead, totalRead, contentLength);
+            }
+}
+
+            if (Update.end()) {
+                if (Update.isFinished()) {
+                    Serial.println("OTA update completed successfully. Restarting...");
+                    ESP.restart();
+                } else {
+                    Serial.println("OTA update did not finish correctly.");
+                }
+            } else {
+                Serial.printf("Update error: %s\n", Update.getError());
+            }
+        } else {
+            Serial.println("Invalid content length or stream is null!");
+        }
+    } else {
+        Serial.printf("HTTP error: %d\n", httpCode);
+    }
+
+    http.end();
+}
+
 // WiFi connection setup
 void connectToWiFi() {
     Serial.print("Connecting to WiFi with SSID: ");
@@ -413,6 +483,13 @@ void connectToWiFi() {
         Serial.println("\nConnected to WiFi!");
         Serial.print("IP Address: ");
         Serial.println(WiFi.localIP());
+
+        Serial.println("Performing an update through OTA");
+        size_t freeSketchSpace = ESP.getFreeSketchSpace();
+        Serial.printf("Free space for OTA: %u bytes\n", freeSketchSpace);
+        delay(3000);
+        performOTAUpdate("http://192.168.1.47:9000/ota/firmware.bin");
+
     } else {
         Serial.println("\nFailed to connect to WiFi.");
     }
@@ -896,6 +973,8 @@ void setup() {
 }
 
 void loop() {
+
+    //Serial.println("Goldap");
 
     if (buttonInterruptOccurred || buttonPressed) {
         buttonInterruptOccurred = false; 
