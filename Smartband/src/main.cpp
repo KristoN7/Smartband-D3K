@@ -100,7 +100,6 @@ NimBLECharacteristic* pPrivateKeyCharacteristic = nullptr;
 
 NimBLECharacteristicCallbacks* ssidCallbacks = nullptr;
 NimBLECharacteristicCallbacks* passwordCallbacks = nullptr;
-NimBLECharacteristicCallbacks* fileTransferCallbacks = nullptr;
 NimBLECharacteristicCallbacks* confirmationCallbacks = nullptr;
 NimBLECharacteristicCallbacks* timeSyncCallbacks = nullptr;
 NimBLECharacteristicCallbacks* batteryStatusCallbacks = nullptr;
@@ -109,6 +108,7 @@ NimBLECharacteristicCallbacks* filesToSendCallbacks = nullptr;
 NimBLECharacteristicCallbacks* privateKeyCallbacks = nullptr;
 
 bool deviceConnected = false;
+bool isSubscribed = false;
 uint16_t currentMTUSize = 23;
 
 //For wifi connection to OTA
@@ -147,7 +147,7 @@ char sdBuffer[bufferSize];  // Buffer to store data before writing to SD card
 size_t bufferIndex = 0;     // Current position in the buffer
 
 //Firmware (change manually)
-const String firmwareVersion = "V23";
+const String firmwareVersion = "V24";
 
 // Resources: battery level and space on SD card
 unsigned long lastResourceCheckTime = 0;
@@ -161,6 +161,9 @@ bool mpu6050Working = false;
 
 const String privateKey = "nuvijridkvinorj";
 bool provisioningComplete = false;
+
+unsigned long lastSentChunkTime = 0;
+
 
 //FUNCTIONS
 
@@ -241,7 +244,6 @@ void signalError(int errorCode) {
 
 void IRAM_ATTR handleButtonPress() { //changing between states is possible after 2 seconds delay
     buttonInterruptOccurred = true; //all the code moved to loop() because of interruption timeout (program took to long while interruption)
-
 }
 
 unsigned long getCurrentTime() {
@@ -509,7 +511,7 @@ public:
     }
 };
 
-// BLE characteristic callbacks
+// BLE characteristic callbacks for WiFi
 class CharacteristicCallbacks : public NimBLECharacteristicCallbacks {
     void onWrite(NimBLECharacteristic* pCharacteristic) override {
         if (!provisioningComplete) {
@@ -586,43 +588,64 @@ public:
     }
 };
 
+void logStackUsage() {
+    TaskHandle_t taskHandle = xTaskGetCurrentTaskHandle();
+    UBaseType_t freeStack = uxTaskGetStackHighWaterMark(taskHandle);
+    Serial.printf("Free stack space for current task: %d bytes\n", freeStack);
+}
+
 //Callback for sending training files to apps
 class FileTransferCallbacks : public NimBLECharacteristicCallbacks {
 private:
     SdFile file;
-    size_t chunkSize = currentMTUSize - 3; // based on MTU size
+    size_t chunkSize = currentMTUSize - 3; // Based on MTU size
     size_t fileSize = 0;
     size_t bytesSent = 0;
-    bool transferInProgress = false;
     String currentFileName;
+    uint8_t *buffer = nullptr;
+    int32_t bytesRead = 0;
+
+public:
+    bool transferInProgress = false;
     bool sendEndMessage = false;
     bool messageSizeSent = false;
 
 public:
     void onRead(NimBLECharacteristic* pCharacteristic) override {
+            Serial.println("READ.");
+    }
+
+    void onSubscribe(NimBLECharacteristic* pCharacteristic, ble_gap_conn_desc* desc, uint16_t subValue) override {
         if (!provisioningComplete) {
             Serial.println("Provisioning not completed. Transmission blocked.");
             return;
         }
-        chunkSize = currentMTUSize - 3;
-        if (!transferInProgress && !sendEndMessage) {
-            if (!sdCard.begin(CS_PIN, SD_SCK_MHZ(25))) {
-                Serial.println("Card Mount Failed");
-                currentState = ERROR;
-                stateChanged = true;
-                return;
-            }
-            sendNextFile();
-        }
 
-        if(!messageSizeSent){
-            sendMessageSize(pCharacteristic);
-        } 
-        else if(transferInProgress){
-            sendNextChunk(pCharacteristic);
-        }
-        else if(sendEndMessage){
-            sendEnd(pCharacteristic);
+        if(subValue == 0x0000){
+            // Client unsubscribed
+            isSubscribed = false;
+            Serial.println("Client unsubscribed from notifications");
+            resetFileTransferState();
+        }   
+        else if(!isSubscribed){
+            // Client subscribed
+            isSubscribed = true;
+            chunkSize = currentMTUSize - 3;
+            Serial.println("Client subscribed to notifications");
+
+            if (!transferInProgress && !sendEndMessage) {
+                if (!sdCard.begin(CS_PIN, SD_SCK_MHZ(25))) {
+                    Serial.println("Card Mount Failed");
+                    currentState = ERROR;
+                    stateChanged = true;
+                    return;
+                }
+                sendNextFile();
+
+                
+            }
+            transferInProgress = true;
+            messageSizeSent = false;
         }
     }
 
@@ -657,41 +680,44 @@ public:
         transferInProgress = true;
 
         Serial.println("File transfer started");
+
+        return;
     }
 
     void sendNextChunk(NimBLECharacteristic* pCharacteristic) {
-        if (!file.isOpen() || !file.available()) {
-            file.close();
-            sdCard.end();
-            transferInProgress = false;
-            Serial.println("File transfer completed");
+
+        if (!transferInProgress || !file.isOpen() || !isSubscribed || !deviceConnected) {
             return;
         }
 
-        // Read the next chunk
-        uint8_t buffer[chunkSize];
-        int32_t bytesRead = file.read(buffer, chunkSize);
-        if (bytesRead <= 0) {
-            Serial.println("Failed to read from file");
-            file.close();
-            sdCard.end();
-            transferInProgress = false;
-            return;
+        if (!buffer) {
+            buffer = (uint8_t*)malloc(chunkSize);
+            if(!buffer){
+                Serial.println("Failed to allocate buffer");
+                resetFileTransferState();
+                return;
+            }
         }
 
-        // Send the chunk
-        pCharacteristic->setValue(buffer, bytesRead);
-        pCharacteristic->notify();
+        bytesRead = file.read(buffer, chunkSize);
+        if (bytesRead > 0) {
+            // Send the chunk
+            pCharacteristic->setValue(buffer, bytesRead);
+            pCharacteristic->notify();
 
-        bytesSent += bytesRead;
-        Serial.printf("Sent %d/%d bytes\n", bytesSent, fileSize);
-
-        if (bytesSent >= fileSize) {
+            bytesSent += bytesRead;
+            Serial.printf("Sent %d/%d bytes\n", bytesSent, fileSize);
+        }
+        else{
+            Serial.println("EOF or error");
+            free(buffer);
+            buffer = nullptr;
             file.close();
             transferInProgress = false;
             sendEndMessage = true;
-            Serial.println("File transfer completed");
         }
+
+        return;
     }
 
     void sendEnd(NimBLECharacteristic* pCharacteristic) {
@@ -763,11 +789,14 @@ public:
     }
 };
 
+FileTransferCallbacks* fileTransferCallbacks = nullptr;
+
 //Simple callbacks for informing the esp32 that someone connected through BLE
 class ServerCallbacks: public NimBLEServerCallbacks {
     void onConnect(NimBLEServer* pServer) override {
         deviceConnected = true;
-        bleDisconnection = 0;
+        isSubscribed = false;
+        bleDisconnection = millis();
         provisioningComplete = false;
         Serial.println("Client connected. Awaiting private key for provisioning.");
     };
@@ -775,6 +804,7 @@ class ServerCallbacks: public NimBLEServerCallbacks {
     void onDisconnect(NimBLEServer* pServer) override {
         bleDisconnection = millis();
         deviceConnected = false;
+        isSubscribed = false;
         Serial.println("Client disconnected.");
         provisioningComplete = false;
         // Reset file transfer state
@@ -960,7 +990,7 @@ void setup() {
 
     pAdvertising = NimBLEDevice::getAdvertising();
     pAdvertising->addServiceUUID(SERVICE_UUID);
-    pAdvertising->start();
+    //pAdvertising->start();
 
     Serial.println("BLE initialized");
 
@@ -1218,12 +1248,29 @@ void loop() {
             } while (sampleEndTime - sampleStartTime < samplingRateInMillis); // 10 miliseconds = 100Hz sampling rate
     }
     
-    if(currentState == BLE && !deviceConnected){
-        if(millis() - bleDisconnection >= bleTimeout){
+    if(currentState == BLE){
+        if(millis() - bleDisconnection >= bleTimeout && !deviceConnected){
             Serial.println("No connection for a longer time, switching to IDLE");
             currentState = IDLE;
             stateChanged = true;
         }
+
+        if(millis() - lastSentChunkTime >= 100){
+            lastSentChunkTime = millis();
+
+            if(isSubscribed && fileTransferCallbacks->transferInProgress){
+                if (!fileTransferCallbacks->messageSizeSent) {
+                fileTransferCallbacks->sendMessageSize(pFileTransferCharacteristic); // Send size of the message
+                fileTransferCallbacks->messageSizeSent = true;
+                } else if (fileTransferCallbacks->transferInProgress) {
+                    fileTransferCallbacks->sendNextChunk(pFileTransferCharacteristic); // Send the next data chunk
+                } else if (fileTransferCallbacks->sendEndMessage) {
+                    fileTransferCallbacks->sendEnd(pFileTransferCharacteristic); // Notify the end of the file
+                    fileTransferCallbacks->sendEndMessage = false;  // Reset state for next file transfer
+                }
+            }
+        }
     }
+
 
 }
