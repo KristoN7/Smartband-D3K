@@ -17,6 +17,9 @@
 #include <HTTPClient.h>
 #include <Update.h>
 
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+
 //Working states 
 #define LED_PIN_IDLE 15
 #define LED_PIN_BLE 2
@@ -163,6 +166,7 @@ const String privateKey = "nuvijridkvinorj";
 bool provisioningComplete = false;
 
 unsigned long lastSentChunkTime = 0;
+uint16_t packetInterval = 4;
 
 
 //FUNCTIONS
@@ -614,6 +618,7 @@ public:
     void onRead(NimBLECharacteristic* pCharacteristic) override {
             Serial.println("READ.");
     }
+    
 
     void onSubscribe(NimBLECharacteristic* pCharacteristic, ble_gap_conn_desc* desc, uint16_t subValue) override {
         if (!provisioningComplete) {
@@ -793,12 +798,45 @@ FileTransferCallbacks* fileTransferCallbacks = nullptr;
 
 //Simple callbacks for informing the esp32 that someone connected through BLE
 class ServerCallbacks: public NimBLEServerCallbacks {
-    void onConnect(NimBLEServer* pServer) override {
+    void onConnect(NimBLEServer* pServer, ble_gap_conn_desc* desc) override {
         deviceConnected = true;
         isSubscribed = false;
         bleDisconnection = millis();
         provisioningComplete = false;
         Serial.println("Client connected. Awaiting private key for provisioning.");
+
+        struct ble_gap_upd_params connParams;
+        connParams.itvl_min = 6; // Minimalny interwał = 15 ms (12 * 1.25 ms)
+        connParams.itvl_max = 15; // Maksymalny interwał = 30 ms (24 * 1.25 ms)
+        connParams.latency = 0;   // Brak opóźnienia (slave latency)
+        connParams.supervision_timeout = 200; // Timeout = 200 * 10 ms = 2 sekundy
+
+                // BLE Throughput Booster #1: Maksymalny rozmiar PDU
+        pServer->setDataLen(desc->conn_handle, 251);
+
+        // BLE Throughput Booster #2: Optymalizacja parametrów połączenia
+         pServer->updateConnParams(desc->conn_handle, 12, 12, 0, 200);
+        vTaskDelay(pdMS_TO_TICKS(100));
+
+        int rc= ble_gap_set_prefered_le_phy(desc->conn_handle,
+        
+                                          BLE_GAP_LE_PHY_2M, // Preferowane PHY TX
+                                          BLE_GAP_LE_PHY_1M, // Preferowane PHY RX
+                                          BLE_HCI_LE_PHY_CODED_ANY); // Brak kodowania
+        if (rc == 0) {
+            Serial.println("PHY preference set to 2M successfully");
+        } else {
+            Serial.printf("Failed to set PHY preference; error code: %d\n", rc);
+        }
+
+        uint8_t tx_phy, rx_phy;
+       
+        rc =  ble_gap_read_le_phy(desc->conn_handle, &tx_phy, &rx_phy);
+        if (rc == 0) {
+            Serial.printf("Negotiated PHY: TX = %d, RX = %d\n", tx_phy, rx_phy);
+        } else {
+            Serial.printf("Failed to read PHY; error code: %d\n", rc);
+        }
     };
 
     void onDisconnect(NimBLEServer* pServer) override {
@@ -832,7 +870,8 @@ class ConfirmationCallbacks : public NimBLECharacteristicCallbacks {
         std::string confirmation = pCharacteristic->getValue();
 
         if (confirmation == "OK"){
-            Serial.println("Confirmation received from app. Deleting file.");
+            isSubscribed = false;
+            Serial.println("Confirmation received from app. Deleting file and setting isSubscribed to false.");
             if (fileTransferCallbacks != nullptr) {
                 //casting to FileTransferCalllbacks, because, NIMBLECharactersiticCallbacks does not have deleteFile() method, so workaround necessary
                 static_cast<FileTransferCallbacks *>(fileTransferCallbacks)->deleteFile();
@@ -1255,13 +1294,13 @@ void loop() {
             stateChanged = true;
         }
 
-        if(millis() - lastSentChunkTime >= 100){
+        if(millis() - lastSentChunkTime >= 25){ //packet interval
             lastSentChunkTime = millis();
 
-            if(isSubscribed && fileTransferCallbacks->transferInProgress){
+            if(isSubscribed && (fileTransferCallbacks->transferInProgress || fileTransferCallbacks->sendEndMessage)){
                 if (!fileTransferCallbacks->messageSizeSent) {
-                fileTransferCallbacks->sendMessageSize(pFileTransferCharacteristic); // Send size of the message
-                fileTransferCallbacks->messageSizeSent = true;
+                    fileTransferCallbacks->sendMessageSize(pFileTransferCharacteristic); // Send size of the message
+                    fileTransferCallbacks->messageSizeSent = true;
                 } else if (fileTransferCallbacks->transferInProgress) {
                     fileTransferCallbacks->sendNextChunk(pFileTransferCharacteristic); // Send the next data chunk
                 } else if (fileTransferCallbacks->sendEndMessage) {
