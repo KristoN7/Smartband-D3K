@@ -9,8 +9,8 @@
 #include <time.h>
 
 // UUIDs for BLE Service and Characteristics
-#define SERVICE_UUID        "12345678-1234-1234-1234-123456789113"
-#define MESSAGE_TRANSFER_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130013"
+#define SERVICE_UUID        "12345678-1234-1234-1234-123456789012"
+#define MESSAGE_TRANSFER_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130005"
 #define SSID_CHAR_UUID      "e2e3f5a4-8c4f-11eb-8dcd-0242ac130003"
 #define PASSWORD_CHAR_UUID  "e2e3f5a4-8c4f-11eb-8dcd-0242ac130004"
 #define CONFIRMATION_UUID "e2e3f5a4-8c4f-11eb-8dcd-0242ac130006"  // confirmation from app regarding file transmission success
@@ -37,6 +37,10 @@ int filesToSend = 1;
 const String privateKey = "nuvijridkvinorj"; 
 bool provisioningComplete = false;
 
+unsigned long lastSentChunkTime = 0;
+uint16_t packetInterval = 4;
+bool isSubscribed = false;
+
 uint8_t sampleData[] = {
     0x10, 0x0E, 0x00, 0x00,   //Unix timestamp
     0x7F, 0x13, 0x00, 0x00,   // IR 
@@ -44,6 +48,7 @@ uint8_t sampleData[] = {
     0x34, 0x04,               // accX
     0xB8, 0x04,               // accY
     0x28, 0x40,                // accZ
+    
     0x49, 0x13, 0x00, 0x00,   
     0x43, 0x22, 0x00, 0x00,   
     0x38, 0x04,               
@@ -93,7 +98,135 @@ uint8_t sampleData[] = {
     0xC6, 0x14, 0x00, 0x00,   
     0x3C, 0x04,               
     0x20, 0x05,               
-    0x08, 0x40,               
+    0x08, 0x40,     
+    0x49, 0x13, 0x00, 0x00,   
+    0x43, 0x22, 0x00, 0x00,   
+    0x38, 0x04,               
+    0x64, 0x04,               
+    0x1C, 0x40,               
+    0xC1, 0x12, 0x00, 0x00,   
+    0x68, 0x1F, 0x00, 0x00,   
+    0x54, 0x04,               
+    0xE0, 0x04,               
+    0x6C, 0x3F,               
+    0x06, 0x12, 0x00, 0x00,   
+    0x9E, 0x1C, 0x00, 0x00,   
+    0x60, 0x04,               
+    0xF4, 0x04,               
+    0xA8, 0x3F,               
+    0x57, 0x11, 0x00, 0x00,   
+    0x49, 0x1A, 0x00, 0x00,   
+    0xB0, 0x04,               
+    0xC4, 0x04,               
+    0xF4, 0x3E,               
+    0xD5, 0x10, 0x00, 0x00,   
+    0x8E, 0x18, 0x00, 0x00,   
+    0x98, 0x04,               
+    0xF4, 0x04,               
+    0xD8, 0x3F,               
+    0x67, 0x10, 0x00, 0x00,   
+    0x7C, 0x17, 0x00, 0x00,   
+    0x84, 0x04,               
+    0xF0, 0x04,               
+    0x38, 0x40,               
+    0x1E, 0x10, 0x00, 0x00,   
+    0xB7, 0x16, 0x00, 0x00,   
+    0x14, 0x04,               
+    0xA4, 0x04,               
+    0x48, 0x40,               
+    0xCB, 0x0F, 0x00, 0x00,   
+    0x2B, 0x16, 0x00, 0x00,   
+    0x48, 0x04,               
+    0xF0, 0x04,               
+    0xBC, 0x3F,               
+    0x60, 0x0F, 0x00, 0x00,   
+    0x7C, 0x15, 0x00, 0x00,   
+    0x4C, 0x04,               
+    0x0C, 0x05,               
+    0x18, 0x40,               
+    0xE1, 0x0E, 0x00, 0x00,   
+    0xC6, 0x14, 0x00, 0x00,   
+    0x3C, 0x04,               
+    0x20, 0x05,               
+    0x08, 0x40,
+        0x60, 0x0F, 0x00, 0x00,   
+    0x7C, 0x15, 0x00, 0x00,   
+    0x4C, 0x04,               
+    0x0C, 0x05,               
+    0x18, 0x40,               
+    0xE1, 0x0E, 0x00, 0x00,   
+    0xC6, 0x14, 0x00, 0x00,   
+    0x3C, 0x04,               
+    0x20, 0x05,               
+    0x08, 0x40,
+        0x49, 0x13, 0x00, 0x00,   
+    0x43, 0x22, 0x00, 0x00,   
+    0x38, 0x04,               
+    0x64, 0x04,               
+    0x1C, 0x40,               
+    0xC1, 0x12, 0x00, 0x00,   
+    0x68, 0x1F, 0x00, 0x00,   
+    0x54, 0x04,               
+    0xE0, 0x04,               
+    0x6C, 0x3F,               
+    0x06, 0x12, 0x00, 0x00,   
+    0x9E, 0x1C, 0x00, 0x00,   
+    0x60, 0x04,               
+    0xF4, 0x04,               
+    0xA8, 0x3F,               
+    0x57, 0x11, 0x00, 0x00,   
+    0x49, 0x1A, 0x00, 0x00,   
+    0xB0, 0x04,               
+    0xC4, 0x04,               
+    0xF4, 0x3E,               
+    0xD5, 0x10, 0x00, 0x00,   
+    0x8E, 0x18, 0x00, 0x00,   
+    0x98, 0x04,               
+    0xF4, 0x04,               
+    0xD8, 0x3F,               
+    0x67, 0x10, 0x00, 0x00,   
+    0x7C, 0x17, 0x00, 0x00,   
+    0x84, 0x04,               
+    0xF0, 0x04,               
+    0x38, 0x40,               
+    0x1E, 0x10, 0x00, 0x00,   
+    0xB7, 0x16, 0x00, 0x00,   
+    0x14, 0x04,               
+    0xA4, 0x04,               
+    0x48, 0x40,               
+    0xCB, 0x0F, 0x00, 0x00,   
+    0x2B, 0x16, 0x00, 0x00,   
+    0x48, 0x04,               
+    0xF0, 0x04,               
+    0xBC, 0x3F,               
+    0x60, 0x0F, 0x00, 0x00,   
+    0x7C, 0x15, 0x00, 0x00,   
+    0x4C, 0x04,               
+    0x0C, 0x05,               
+    0x18, 0x40,               
+    0xE1, 0x0E, 0x00, 0x00,   
+    0xC6, 0x14, 0x00, 0x00,   
+    0x3C, 0x04,               
+    0x20, 0x05,               
+    0x08, 0x40,
+        0x60, 0x0F, 0x00, 0x00,   
+    0x7C, 0x15, 0x00, 0x00,   
+    0x4C, 0x04,               
+    0x0C, 0x05,               
+    0x18, 0x40,               
+    0xE1, 0x0E, 0x00, 0x00,   
+    0xC6, 0x14, 0x00, 0x00,   
+    0x3C, 0x04,               
+    0x20, 0x05,               
+    0x08, 0x40,
+    0x3C, 0x04,               
+    0x20, 0x05,               
+    0x08, 0x40,
+    0x3C, 0x04,               
+    0x20, 0x05,               
+    0x08, 0x40,
+    0x3C, 0x04,               
+    0x20            
 };
 
 NimBLEServer* pServer = nullptr;
@@ -112,7 +245,7 @@ NimBLECharacteristic *pPrivateKeyCharacteristic = nullptr;
 
 NimBLECharacteristicCallbacks* ssidCallbacks = nullptr;
 NimBLECharacteristicCallbacks* passwordCallbacks = nullptr;
-NimBLECharacteristicCallbacks* fileTransferCallbacks = nullptr;
+//NimBLECharacteristicCallbacks* fileTransferCallbacks = nullptr;
 NimBLECharacteristicCallbacks* confirmationCallbacks = nullptr;
 NimBLECharacteristicCallbacks* timeSyncCallbacks = nullptr;
 NimBLECharacteristicCallbacks* batteryStatusCallbacks = nullptr;
@@ -218,18 +351,40 @@ public:
     }
 };
 
+
 class ServerCallbacks: public NimBLEServerCallbacks {
     void onConnect(NimBLEServer* pServer, ble_gap_conn_desc* desc) override {
         deviceConnected = true;
+        isSubscribed = false;
         provisioningComplete = false;
         Serial.println("Client connected. Awaiting private key for provisioning.");
 
-         // BLE Throughput Booster #1: Maksymalny rozmiar PDU
+        // BLE Throughput Booster #1: Maksymalny rozmiar PDU
         pServer->setDataLen(desc->conn_handle, 251);
 
         // BLE Throughput Booster #2: Optymalizacja parametrów połączenia
         pServer->updateConnParams(desc->conn_handle, 12, 12, 0, 200);
         vTaskDelay(pdMS_TO_TICKS(100));
+
+        int rc= ble_gap_set_prefered_le_phy(desc->conn_handle,
+        
+                                          BLE_GAP_LE_PHY_2M, // Preferowane PHY TX
+                                          BLE_GAP_LE_PHY_1M, // Preferowane PHY RX
+                                          BLE_HCI_LE_PHY_CODED_ANY); // Brak kodowania
+        if (rc == 0) {
+            Serial.println("PHY preference set to 2M successfully");
+        } else {
+            Serial.printf("Failed to set PHY preference; error code: %d\n", rc);
+        }
+
+        uint8_t tx_phy, rx_phy;
+       
+        rc =  ble_gap_read_le_phy(desc->conn_handle, &tx_phy, &rx_phy);
+        if (rc == 0) {
+            Serial.printf("Negotiated PHY: TX = %d, RX = %d\n", tx_phy, rx_phy);
+        } else {
+            Serial.printf("Failed to read PHY; error code: %d\n", rc);
+        }
     }
 
     void onMTUChange(uint16_t MTU, ble_gap_conn_desc* desc) override {
@@ -239,6 +394,7 @@ class ServerCallbacks: public NimBLEServerCallbacks {
     }
 
     void onDisconnect(NimBLEServer* pServer) override {
+        deviceConnected = false;
         deviceConnected = false;
         Serial.println("Client disconnected.");
         provisioningComplete = false;
@@ -252,37 +408,42 @@ private:
     size_t chunkSize = currentMTUSize - 3; // based on MTU size and performance
     size_t sampleSize = sizeof(sampleData);
     size_t bytesSent = 0;
+    uint8_t *buffer = nullptr;
+    int counter = 0;
+
+public:
     bool transferInProgress = false;
     bool sendEndMessage = false;
     bool messageSizeSent = false;
 
-public:
     void onRead(NimBLECharacteristic* pCharacteristic) override {
+        Serial.println("READ.");
+    }
+
+void onSubscribe(NimBLECharacteristic* pCharacteristic, ble_gap_conn_desc* desc, uint16_t subValue) override {
         if (!provisioningComplete) {
             Serial.println("Provisioning not completed. Transmission blocked.");
-            return;  // Blokuje wszelkie działania
+            return;
         }
 
-        chunkSize = currentMTUSize - 3;
+        if(subValue == 0x0000){
+            // Client unsubscribed
+            isSubscribed = false;
+            Serial.println("Client unsubscribed from notifications");
+        }   
+        else if(!isSubscribed){
+            // Client subscribed
+            isSubscribed = true;
+            chunkSize = currentMTUSize - 3;
+            Serial.println("Client subscribed to notifications");
 
-
-        if (!transferInProgress && !sendEndMessage) {
-            startMessageTransfer();
-        }
-
-        if(!messageSizeSent){
-            sendMessageSize(pCharacteristic);
-        }
-        else if (transferInProgress) {
-            sendNextChunk(pCharacteristic);
-        } 
-        else if (sendEndMessage) {
-            sendEnd(pCharacteristic);
+            transferInProgress = true;
+            messageSizeSent = false;
         }
     }
 
     void sendMessageSize(NimBLECharacteristic* pCharacteristic) {
-        uint32_t messageSize = sampleSize;
+        uint32_t messageSize = 600*509;
         uint8_t sizeBytes[4];
 
         // Little Endian Conversion
@@ -307,21 +468,39 @@ public:
     }
 
     void sendNextChunk(NimBLECharacteristic* pCharacteristic) {
-        // Calculate the number of bytes left to send
-        size_t bytesRemaining = sampleSize - bytesSent;
-        size_t bytesToSend = min(chunkSize, bytesRemaining);
+        if(counter < 600){
+            // Calculate the number of bytes left to send
+            size_t bytesRemaining = sampleSize - bytesSent;
+            size_t bytesToSend = min(chunkSize, bytesRemaining);
 
-        // Send the chunk
-        pCharacteristic->setValue(&sampleData[bytesSent], bytesToSend);
-        pCharacteristic->notify();
+        if (!buffer) {
+            buffer = (uint8_t*)malloc(chunkSize);
+            if(!buffer){
+                Serial.println("Failed to allocate buffer");
+                return;
+            }
+        }
 
-        bytesSent += bytesToSend;
-        Serial.printf("Sent %d/%d bytes\n", bytesSent, sampleSize);
+        
 
-        if (bytesSent >= sampleSize) {
-            transferInProgress = false;
-            sendEndMessage = true; // Set flag to send "END" message next
-            Serial.println("Message transfer completed");
+
+            // Send the chunk
+            pCharacteristic->setValue(&sampleData[bytesSent], bytesToSend);
+            pCharacteristic->notify();
+
+            bytesSent += bytesToSend;
+           // Serial.printf("Sent %d/%d bytes\n", bytesSent, sampleSize);
+
+            if (bytesSent >= sampleSize) {
+                bytesSent = 0;
+                //Serial.println("Message transfer completed");
+            }
+            counter++;
+        }
+        else{
+             transferInProgress = false;
+            sendEndMessage = true;
+            counter = 0;
         }
     }
 
@@ -338,6 +517,9 @@ public:
         messageSizeSent = false;
     }
 };
+
+
+MessageTransferCallbacks* fileTransferCallbacks = nullptr;
 
 // Characteristic response for successful message transmission
 class ConfirmationCallbacks : public NimBLECharacteristicCallbacks {
@@ -401,7 +583,7 @@ void setup() {
 
     if (pAdvertising->isAdvertising() == false or pAdvertising == nullptr or pServer == nullptr or pService == nullptr) {
                     
-        NimBLEDevice::init("ESP32_Smartband_mini");
+        NimBLEDevice::init("ESP32 D3K");
         NimBLEDevice::setMTU(512);
 
         pServer = NimBLEDevice::createServer();
@@ -423,11 +605,12 @@ void setup() {
             );
         pPasswordCharacteristic->setCallbacks(passwordCallbacks);
     
+        fileTransferCallbacks = new MessageTransferCallbacks();
         pMessageTransferCharacteristic = pService->createCharacteristic(
             MESSAGE_TRANSFER_UUID,
             NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
         );
-        pMessageTransferCharacteristic->setCallbacks(new MessageTransferCallbacks());
+        pMessageTransferCharacteristic->setCallbacks(fileTransferCallbacks);
 
         confirmationCallbacks = new ConfirmationCallbacks();
         pConfirmationCharacteristic = pService->createCharacteristic(
@@ -485,13 +668,30 @@ void setup() {
 }
 
 void loop() {
-    if(getCurrentTime() > 0 && millis() - time1 > 3000){
-        Serial.println(getCurrentTime());
-        time1 = millis();
-        if (deviceConnected) {
-            // In case you want to retrieve it again
-            Serial.print("Current MTU size: ");
-            Serial.println(currentMTUSize);
+    // if(getCurrentTime() > 0 && millis() - time1 > 3000){
+    //     Serial.println(getCurrentTime());
+    //     time1 = millis();
+    //     if (deviceConnected) {
+    //         // In case you want to retrieve it again
+    //         Serial.print("Current MTU size: ");
+    //         Serial.println(currentMTUSize);
+    //     }
+    // }
+
+    
+        if(millis() - lastSentChunkTime >= 25){ //packet interval
+            lastSentChunkTime = millis();
+
+        if(isSubscribed && (fileTransferCallbacks->transferInProgress || fileTransferCallbacks->sendEndMessage)){
+            if (!fileTransferCallbacks->messageSizeSent) {
+                fileTransferCallbacks->sendMessageSize(pMessageTransferCharacteristic); // Send size of the message
+                fileTransferCallbacks->messageSizeSent = true;
+            } else if (fileTransferCallbacks->transferInProgress) {
+                fileTransferCallbacks->sendNextChunk(pMessageTransferCharacteristic); // Send the next data chunk
+            } else if (fileTransferCallbacks->sendEndMessage) {
+                fileTransferCallbacks->sendEnd(pMessageTransferCharacteristic); // Notify the end of the file
+                fileTransferCallbacks->sendEndMessage = false;  // Reset state for next file transfer
+            }
         }
     }
 }
