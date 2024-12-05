@@ -793,12 +793,22 @@ FileTransferCallbacks* fileTransferCallbacks = nullptr;
 
 //Simple callbacks for informing the esp32 that someone connected through BLE
 class ServerCallbacks: public NimBLEServerCallbacks {
-    void onConnect(NimBLEServer* pServer) override {
+    void onConnect(NimBLEServer* pServer, ble_gap_conn_desc* desc) override {
         deviceConnected = true;
         isSubscribed = false;
         bleDisconnection = millis();
         provisioningComplete = false;
         Serial.println("Client connected. Awaiting private key for provisioning.");
+
+        // Ustawienie Connection Interval na 15 ms
+        pServer->updateConnParams(
+            desc->conn_handle,
+            12,               
+            12,               
+            0,                 
+            400                
+        );
+
     };
 
     void onDisconnect(NimBLEServer* pServer) override {
