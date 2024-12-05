@@ -219,10 +219,17 @@ public:
 };
 
 class ServerCallbacks: public NimBLEServerCallbacks {
-    void onConnect(NimBLEServer* pServer) override {
+    void onConnect(NimBLEServer* pServer, ble_gap_conn_desc* desc) override {
         deviceConnected = true;
         provisioningComplete = false;
         Serial.println("Client connected. Awaiting private key for provisioning.");
+
+         // BLE Throughput Booster #1: Maksymalny rozmiar PDU
+        pServer->setDataLen(desc->conn_handle, 251);
+
+        // BLE Throughput Booster #2: Optymalizacja parametrów połączenia
+        pServer->updateConnParams(desc->conn_handle, 12, 12, 0, 200);
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 
     void onMTUChange(uint16_t MTU, ble_gap_conn_desc* desc) override {
