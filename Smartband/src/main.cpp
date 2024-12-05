@@ -806,12 +806,12 @@ class ServerCallbacks: public NimBLEServerCallbacks {
         Serial.println("Client connected. Awaiting private key for provisioning.");
 
         struct ble_gap_upd_params connParams;
-        connParams.itvl_min = 6; // Minimalny interwał = 15 ms (12 * 1.25 ms)
-        connParams.itvl_max = 15; // Maksymalny interwał = 30 ms (24 * 1.25 ms)
-        connParams.latency = 0;   // Brak opóźnienia (slave latency)
-        connParams.supervision_timeout = 200; // Timeout = 200 * 10 ms = 2 sekundy
+        connParams.itvl_min = 6; 
+        connParams.itvl_max = 15; 
+        connParams.latency = 0;   
+        connParams.supervision_timeout = 200; 
 
-                // BLE Throughput Booster #1: Maksymalny rozmiar PDU
+        // BLE Throughput Booster #1: Maksymalny rozmiar PDU
         pServer->setDataLen(desc->conn_handle, 251);
 
         // BLE Throughput Booster #2: Optymalizacja parametrów połączenia
