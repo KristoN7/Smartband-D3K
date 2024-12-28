@@ -21,7 +21,7 @@
 #include <freertos/task.h>
 
 //Working states 
-#define LED_PIN_IDLE 15
+//#define LED_PIN_IDLE 15
 #define LED_PIN_BLE 2
 #define LED_PIN_TRAINING 4
 #define BUTTON_PIN 13
@@ -910,7 +910,7 @@ void setup() {
 
     Wire.begin();
 
-    pinMode(LED_PIN_IDLE, OUTPUT);
+    //pinMode(LED_PIN_IDLE, OUTPUT);
     pinMode(LED_PIN_BLE, OUTPUT);
     pinMode(LED_PIN_TRAINING, OUTPUT);
     pinMode(BUTTON_PIN, INPUT_PULLUP); // using an inner built-in resistor on ESP32
@@ -919,7 +919,7 @@ void setup() {
     attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), handleButtonPress, CHANGE);
 
     // The initial LED state 
-    digitalWrite(LED_PIN_IDLE, LOW);
+    //digitalWrite(LED_PIN_IDLE, LOW);
     digitalWrite(LED_PIN_BLE, LOW);
     digitalWrite(LED_PIN_TRAINING, LOW);
 
@@ -941,12 +941,10 @@ void setup() {
     sensorMPU.setSleepEnabled(true);
 
     // SD card module initialization
-    if (!sdCard.begin(CS_PIN, SD_SCK_MHZ(25))) { 
-        Serial.println("Card Mount Failed");
-        signalError(ERROR_SD_NOT_FOUND);
-    }
-
-
+    while(!sdCard.begin(CS_PIN, SD_SCK_MHZ(25))) { 
+            Serial.println("Card Mount Failed");
+            signalError(ERROR_SD_NOT_FOUND);
+        }
 
     uint64_t cardSize = (sdCard.card()->sectorCount() * 512ULL) / (1024 * 1024);
     Serial.printf("SD Card Size: %lluMB\n", cardSize);
@@ -1034,7 +1032,7 @@ void setup() {
     Serial.println("BLE initialized");
 
     // IDLE MODE IN THE BEGINNING
-    digitalWrite(LED_PIN_IDLE, HIGH);
+    //digitalWrite(LED_PIN_IDLE, HIGH);
     digitalWrite(LED_PIN_BLE, LOW);
     digitalWrite(LED_PIN_TRAINING, LOW);
     sdCard.end();
@@ -1102,7 +1100,7 @@ void loop() {
 
         switch (currentState) {
             case IDLE: // Idle state, no data are collected from sensors
-                digitalWrite(LED_PIN_IDLE, HIGH);
+                //digitalWrite(LED_PIN_IDLE, HIGH);
                 digitalWrite(LED_PIN_BLE, LOW);
                 digitalWrite(LED_PIN_TRAINING, LOW);
                 
@@ -1134,7 +1132,7 @@ void loop() {
                     break;
                 }
 
-                digitalWrite(LED_PIN_IDLE, LOW);
+                //digitalWrite(LED_PIN_IDLE, LOW);
                 digitalWrite(LED_PIN_BLE, HIGH);
                 digitalWrite(LED_PIN_TRAINING, LOW);
 
@@ -1189,7 +1187,7 @@ void loop() {
                 sensorMAX.setFIFOAverage(8);
                 sensorMPU.setSleepEnabled(false);
 
-                digitalWrite(LED_PIN_IDLE, LOW);
+                //digitalWrite(LED_PIN_IDLE, LOW);
                 digitalWrite(LED_PIN_BLE, LOW);
                 digitalWrite(LED_PIN_TRAINING, HIGH);
 
@@ -1233,7 +1231,7 @@ void loop() {
                 break;
 
             default:
-                digitalWrite(LED_PIN_IDLE, LOW);
+               // digitalWrite(LED_PIN_IDLE, LOW);
                 digitalWrite(LED_PIN_BLE, LOW);
                 digitalWrite(LED_PIN_TRAINING, LOW);
                 checkIfIsWorn = false;
